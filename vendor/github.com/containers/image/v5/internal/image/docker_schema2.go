@@ -3,7 +3,7 @@ package image
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -367,7 +367,7 @@ func v1IDFromBlobDigestAndComponents(blobDigest digest.Digest, others ...string)
 		return "", err
 	}
 	parts := append([]string{blobDigest.Encoded()}, others...)
-	v1IDHash := sha256.Sum256([]byte(strings.Join(parts, " ")))
+	v1IDHash := sha512.Sum512([]byte(strings.Join(parts, " ")))
 	return hex.EncodeToString(v1IDHash[:]), nil
 }
 

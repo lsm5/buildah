@@ -410,6 +410,6 @@ func (s storageTransport) ValidatePolicyConfigurationScope(scope string) error {
 
 // validateImageID returns nil if id is a valid (full) image ID, or an error
 func validateImageID(id string) error {
-	_, err := digest.Parse("sha256:" + id)
+	_, err := digest.Parse("sha512:" + id)
 	return err
 }

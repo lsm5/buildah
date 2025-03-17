@@ -37,7 +37,7 @@ const (
 	// Canonical is the primary digest algorithm used with the distribution
 	// project. Other digests may be used but this one is the primary storage
 	// digest.
-	Canonical = SHA256
+	Canonical = SHA512
 )
 
 var (
