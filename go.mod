@@ -137,7 +137,7 @@ require (
 	github.com/titanous/rocacheck v0.0.0-20171023193734-afe73141d399 // indirect
 	github.com/ulikunitz/xz v0.5.12 // indirect
 	github.com/vbatts/tar-split v0.12.1 // indirect
-	github.com/vbauerster/mpb/v8 v8.10.1 // indirect
+	github.com/vbauerster/mpb/v8 v8.10.2 // indirect
 	github.com/vishvananda/netlink v1.3.1 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	go.mongodb.org/mongo-driver v1.17.3 // indirect
@@ -148,7 +148,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.34.0 // indirect
 	go.opentelemetry.io/otel/trace v1.34.0 // indirect
 	golang.org/x/mod v0.25.0 // indirect
-	golang.org/x/net v0.39.0 // indirect
+	golang.org/x/net v0.40.0 // indirect
 	golang.org/x/text v0.26.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20250303144028-a0af3efb3deb // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250313205543-e70fdf4c4cb4 // indirect
@@ -158,3 +158,9 @@ require (
 	k8s.io/klog v1.0.0 // indirect
 	tags.cncf.io/container-device-interface/specs-go v1.0.0 // indirect
 )
+
+replace github.com/containers/storage => /home/lsm5/repositories/containers/storage
+
+replace github.com/containers/image/v5 => /home/lsm5/repositories/containers/image
+
+replace github.com/containers/common => /home/lsm5/repositories/containers/common

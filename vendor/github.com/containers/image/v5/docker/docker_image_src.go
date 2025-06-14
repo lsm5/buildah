@@ -28,6 +28,7 @@ import (
 	"github.com/containers/image/v5/pkg/sysregistriesv2"
 	"github.com/containers/image/v5/types"
 	"github.com/containers/storage/pkg/regexp"
+	storageTypes "github.com/containers/storage/types"
 	digest "github.com/opencontainers/go-digest"
 	"github.com/sirupsen/logrus"
 )
@@ -35,6 +36,20 @@ import (
 // maxLookasideSignatures is an arbitrary limit for the total number of signatures we would try to read from a lookaside server,
 // even if it were broken or malicious and it continued serving an enormous number of items.
 const maxLookasideSignatures = 128
+
+// getDigestAlgorithm returns the digest algorithm to use based on storage.conf configuration
+func getDigestAlgorithm() digest.Algorithm {
+	storeOptions, err := storageTypes.DefaultStoreOptions()
+	if err != nil {
+		return digest.SHA256
+	}
+	switch storeOptions.DigestType {
+	case "sha512":
+		return digest.SHA512
+	default:
+		return digest.SHA256
+	}
+}
 
 type dockerImageSource struct {
 	impl.Compat
@@ -113,7 +128,7 @@ func newImageSource(ctx context.Context, sys *types.SystemContext, ref dockerRef
 	case 1:
 		return nil, attempts[0].err // If no mirrors are used, perfectly preserve the error type and add no noise.
 	default:
-		// Don’t just build a string, try to preserve the typed error.
+		// Don't just build a string, try to preserve the typed error.
 		primary := &attempts[len(attempts)-1]
 		extras := []string{}
 		for _, attempt := range attempts[:len(attempts)-1] {
@@ -247,7 +262,7 @@ func (s *dockerImageSource) fetchManifest(ctx context.Context, tagOrDigest strin
 // ensureManifestIsLoaded sets s.cachedManifest and s.cachedManifestMIMEType
 //
 // ImageSource implementations are not required or expected to do any caching,
-// but because our signatures are “attached” to the manifest digest,
+// but because our signatures are "attached" to the manifest digest,
 // we need to ensure that the digest of the manifest returned by GetManifest(ctx, nil)
 // and used by GetSignatures(ctx, nil) are consistent, otherwise we would get spurious
 // signature verification failures when pulling while a tag is being updated.
@@ -450,7 +465,7 @@ func (s *dockerImageSource) GetBlobAt(ctx context.Context, info types.BlobInfo, 
 	}
 }
 
-// GetBlob returns a stream for the specified blob, and the blob’s size (or -1 if unknown).
+// GetBlob returns a stream for the specified blob, and the blob's size (or -1 if unknown).
 // The Digest field in BlobInfo is guaranteed to be provided, Size may be -1 and MediaType may be optionally provided.
 // May update BlobInfoCache, preferably after it knows for certain that a blob truly exists at a specific location.
 func (s *dockerImageSource) GetBlob(ctx context.Context, info types.BlobInfo, cache types.BlobInfoCache) (io.ReadCloser, int64, error) {
@@ -493,7 +508,7 @@ func (s *dockerImageSource) manifestDigest(ctx context.Context, instanceDigest *
 	}
 	if digested, ok := s.physicalRef.ref.(reference.Digested); ok {
 		d := digested.Digest()
-		if d.Algorithm() == digest.Canonical {
+		if d.Algorithm() == getDigestAlgorithm() {
 			return d, nil
 		}
 	}
@@ -575,8 +590,8 @@ func (s *dockerImageSource) getOneSignature(ctx context.Context, sigURL *url.URL
 		contentType := res.Header.Get("Content-Type")
 		if mimeType := simplifyContentType(contentType); mimeType == "text/html" {
 			logrus.Warnf("Signature %q has Content-Type %q, unexpected for a signature", sigURL.Redacted(), contentType)
-			// Don’t immediately fail; the lookaside spec does not place any requirements on Content-Type.
-			// If the content really is HTML, it’s going to fail in signature.FromBlob.
+			// Don't immediately fail; the lookaside spec does not place any requirements on Content-Type.
+			// If the content really is HTML, it's going to fail in signature.FromBlob.
 		}
 
 		sigBlob, err := iolimits.ReadAtMost(res.Body, iolimits.MaxSignatureBodySize)
@@ -643,7 +658,7 @@ func (s *dockerImageSource) appendSignaturesFromSigstoreAttachments(ctx context.
 		// Note that this copies all kinds of attachments: attestations, and whatever else is there,
 		// not just signatures. We leave the signature consumers to decide based on the MIME type.
 		logrus.Debugf("Fetching sigstore attachment %d/%d: %s", layerIndex+1, len(ociManifest.Layers), layer.Digest.String())
-		// We don’t benefit from a real BlobInfoCache here because we never try to reuse/mount attachment payloads.
+		// We don't benefit from a real BlobInfoCache here because we never try to reuse/mount attachment payloads.
 		// That might eventually need to change if payloads grow to be not just signatures, but something
 		// significantly large.
 		payload, err := s.c.getOCIDescriptorContents(ctx, s.physicalRef, layer, iolimits.MaxSignatureBodySize,

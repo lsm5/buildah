@@ -1444,7 +1444,12 @@ func runSetupBuiltinVolumes(mountLabel, mountPoint, containerDir string, builtin
 		// If we need to, create the directory that we'll use to hold
 		// the volume contents.  If we do need to create it, then we'll
 		// need to populate it, too, so make a note of that.
-		volumePath := filepath.Join(containerDir, "buildah-volumes", digest.Canonical.FromString(volume).Hex())
+		digestType := getDigestType()
+		algorithm := digest.Algorithm(digestType)
+		if !algorithm.Available() {
+			algorithm = digest.Canonical // Fallback to the canonical algorithm if the requested one is not available
+		}
+		volumePath := filepath.Join(containerDir, "buildah-volumes", algorithm.FromString(volume).Hex())
 		initializeVolume := false
 		if err := fileutils.Exists(volumePath); err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
@@ -2096,17 +2101,14 @@ func relabel(path, mountLabel string, shared bool) error {
 // mapContainerNameToHostname returns the passed-in string with characters that
 // don't match validHostnames (defined above) stripped out.
 func mapContainerNameToHostname(containerName string) string {
-	match := validHostnames.FindStringIndex(containerName)
-	if match == nil {
-		return ""
+	// Get the digest type from storage.conf
+	digestType := getDigestType()
+	algorithm := digest.Algorithm(digestType)
+	if !algorithm.Available() {
+		algorithm = digest.Canonical // Fallback to the canonical algorithm if the requested one is not available
 	}
-	trimmed := containerName[match[0]:]
-	match[1] -= match[0]
-	match[0] = 0
-	for match[1] != len(trimmed) && match[1] < match[0]+maxHostnameLen {
-		trimmed = trimmed[:match[1]] + trimmed[match[1]+1:]
-		match = validHostnames.FindStringIndex(trimmed)
-		match[1] = min(match[1], maxHostnameLen)
-	}
-	return trimmed[:match[1]]
+
+	// Use the algorithm to create a digest from the container name
+	d := algorithm.FromString(containerName)
+	return d.Encoded()[:maxHostnameLen]
 }

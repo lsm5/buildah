@@ -14,6 +14,8 @@ import (
 	filtersPkg "github.com/containers/common/pkg/filters"
 	"github.com/containers/common/pkg/timetype"
 	"github.com/containers/image/v5/docker/reference"
+	storageTypes "github.com/containers/storage/types"
+	"github.com/opencontainers/go-digest"
 	"github.com/sirupsen/logrus"
 )
 
@@ -434,7 +436,9 @@ func filterID(value string) filterFunc {
 
 // filterDigest creates a digest filter for matching the specified value.
 func filterDigest(value string) (filterFunc, error) {
-	if !strings.HasPrefix(value, "sha256:") {
+	digestAlgorithm := getDigestAlgorithm()
+	expectedPrefix := digestAlgorithm.String() + ":"
+	if !strings.HasPrefix(value, expectedPrefix) {
 		return nil, fmt.Errorf("invalid value %q for digest filter", value)
 	}
 	return func(img *Image, _ *layerTree) (bool, error) {
@@ -452,5 +456,19 @@ func filterIntermediate(ctx context.Context, value bool) filterFunc {
 			return false, err
 		}
 		return isIntermediate == value, nil
+	}
+}
+
+// getDigestAlgorithm returns the digest algorithm to use based on storage.conf configuration
+func getDigestAlgorithm() digest.Algorithm {
+	storeOptions, err := storageTypes.DefaultStoreOptions()
+	if err != nil {
+		return digest.SHA256
+	}
+	switch storeOptions.DigestType {
+	case "sha512":
+		return digest.SHA512
+	default:
+		return digest.SHA256
 	}
 }

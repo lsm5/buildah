@@ -164,8 +164,9 @@ type rwImageStore interface {
 type imageStore struct {
 	// The following fields are only set when constructing imageStore, and must never be modified afterwards.
 	// They are safe to access without any other locking.
-	lockfile *lockfile.LockFile // lockfile.IsReadWrite can be used to distinguish between read-write and read-only image stores.
-	dir      string
+	lockfile   *lockfile.LockFile // lockfile.IsReadWrite can be used to distinguish between read-write and read-only image stores.
+	dir        string
+	digestType string
 
 	inProcessLock sync.RWMutex // Can _only_ be obtained with lockfile held.
 	// The following fields can only be read/written with read/write ownership of inProcessLock, respectively.
@@ -281,7 +282,7 @@ func (r *imageStore) startReadingWithReload(canReload bool) error {
 			r.inProcessLock.RUnlock()
 			unlockFn = r.lockfile.Unlock
 
-			// r.lastWrite can change at this point if another goroutine reloads the store before us. That’s why we don’t unconditionally
+			// r.lastWrite can change at this point if another goroutine reloads the store before us. That's why we don't unconditionally
 			// trigger a load below; we (lock and) reloadIfChanged() again.
 
 			// First try reloading with r.lockfile held for reading.
@@ -289,8 +290,8 @@ func (r *imageStore) startReadingWithReload(canReload bool) error {
 			// each will re-check on-disk state vs. r.lastWrite, and the first one will actually reload the data.
 			var tryLockedForWriting bool
 			if err := inProcessLocked(func() error {
-				// We could optimize this further: The r.lockfile.GetLastWrite() value shouldn’t change as long as we hold r.lockfile,
-				// so if r.lastWrite was already updated, we don’t need to actually read the on-filesystem lock.
+				// We could optimize this further: The r.lockfile.GetLastWrite() value shouldn't change as long as we hold r.lockfile,
+				// so if r.lastWrite was already updated, we don't need to actually read the on-filesystem lock.
 				var err error
 				tryLockedForWriting, err = r.reloadIfChanged(false)
 				return err
@@ -298,7 +299,7 @@ func (r *imageStore) startReadingWithReload(canReload bool) error {
 				if !tryLockedForWriting {
 					return err
 				}
-				// Not good enough, we need r.lockfile held for writing. So, let’s do that.
+				// Not good enough, we need r.lockfile held for writing. So, let's do that.
 				unlockFn()
 				unlockFn = nil
 
@@ -319,7 +320,7 @@ func (r *imageStore) startReadingWithReload(canReload bool) error {
 				// after we released the lock.
 				// If that, _again_, finds inconsistent state, just give up.
 				// We could, plausibly, retry a few times, but that inconsistent state (duplicate image names)
-				// shouldn’t be saved (by correct implementations) in the first place.
+				// shouldn't be saved (by correct implementations) in the first place.
 				if err := inProcessLocked(func() error {
 					_, err := r.reloadIfChanged(false)
 					return err
@@ -328,12 +329,12 @@ func (r *imageStore) startReadingWithReload(canReload bool) error {
 				}
 			}
 
-			// NOTE that we hold neither a read nor write inProcessLock at this point. That’s fine in ordinary operation, because
+			// NOTE that we hold neither a read nor write inProcessLock at this point. That's fine in ordinary operation, because
 			// the on-filesystem r.lockfile should protect us against (cooperating) writers, and any use of r.inProcessLock
 			// protects us against in-process writers modifying data.
 			// In presence of non-cooperating writers, we just ensure that 1) the in-memory data is not clearly out-of-date
 			// and 2) access to the in-memory data is not racy;
-			// but we can’t protect against those out-of-process writers modifying _files_ while we are assuming they are in a consistent state.
+			// but we can't protect against those out-of-process writers modifying _files_ while we are assuming they are in a consistent state.
 
 			r.inProcessLock.RLock()
 		}
@@ -589,7 +590,7 @@ func (r *imageStore) Save() error {
 	return nil
 }
 
-func newImageStore(dir string) (rwImageStore, error) {
+func newImageStore(dir string, digestType string) (rwImageStore, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -598,8 +599,9 @@ func newImageStore(dir string) (rwImageStore, error) {
 		return nil, err
 	}
 	istore := imageStore{
-		lockfile: lockfile,
-		dir:      dir,
+		lockfile:   lockfile,
+		dir:        dir,
+		digestType: digestType,
 
 		images:   []*Image{},
 		byid:     make(map[string]*Image),
@@ -620,14 +622,15 @@ func newImageStore(dir string) (rwImageStore, error) {
 	return &istore, nil
 }
 
-func newROImageStore(dir string) (roImageStore, error) {
+func newROImageStore(dir string, digestType string) (roImageStore, error) {
 	lockfile, err := lockfile.GetROLockFile(filepath.Join(dir, "images.lock"))
 	if err != nil {
 		return nil, err
 	}
 	istore := imageStore{
-		lockfile: lockfile,
-		dir:      dir,
+		lockfile:   lockfile,
+		dir:        dir,
+		digestType: digestType,
 
 		images:   []*Image{},
 		byid:     make(map[string]*Image),
@@ -734,7 +737,7 @@ func (r *imageStore) create(id string, names []string, layer string, options Ima
 		return nil, fmt.Errorf("validating digests for new image: %w", err)
 	}
 	r.images = append(r.images, image)
-	// This can only fail on duplicate IDs, which shouldn’t happen — and in
+	// This can only fail on duplicate IDs, which shouldn't happen — and in
 	// that case the index is already in the desired state anyway.
 	// Implementing recovery from an unlikely and unimportant failure here
 	// would be too risky.
@@ -763,7 +766,8 @@ func (r *imageStore) create(id string, names []string, layer string, options Ima
 	}
 	for _, item := range options.BigData {
 		if item.Digest == "" {
-			item.Digest = digest.Canonical.FromBytes(item.Data)
+			digestAlgorithm := getDigestAlgorithmFromType(r.digestType)
+			item.Digest = digestAlgorithm.FromBytes(item.Data)
 		}
 		if err = r.setBigData(image, item.Key, item.Data, item.Digest); err != nil {
 			return nil, err
@@ -865,8 +869,8 @@ func (r *imageStore) Delete(id string) error {
 	}
 	id = image.ID
 	delete(r.byid, id)
-	// This can only fail if the ID is already missing, which shouldn’t happen — and in that case the index is already in the desired state anyway.
-	// The store’s Delete method is used on various paths to recover from failures, so this should be robust against partially missing data.
+	// This can only fail if the ID is already missing, which shouldn't happen — and in that case the index is already in the desired state anyway.
+	// The store's Delete method is used on various paths to recover from failures, so this should be robust against partially missing data.
 	_ = r.idindex.Delete(id)
 	for _, name := range image.Names {
 		delete(r.byname, name)
@@ -988,7 +992,8 @@ func (r *imageStore) SetBigData(id, key string, data []byte, digestManifest func
 			return fmt.Errorf("digesting manifest: %w", err)
 		}
 	} else {
-		newDigest = digest.Canonical.FromBytes(data)
+		digestAlgorithm := getDigestAlgorithmFromType(r.digestType)
+		newDigest = digestAlgorithm.FromBytes(data)
 	}
 	return r.setBigData(image, key, data, newDigest)
 }

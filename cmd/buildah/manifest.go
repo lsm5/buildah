@@ -81,15 +81,14 @@ func init() {
 	)
 	manifestCommand := &cobra.Command{
 		Use:   "manifest",
-		Short: "Manipulate manifest lists and image indexes",
+		Short: "Inspect and manipulate manifest lists and image indexes",
 		Long:  manifestDescription,
 		Example: `buildah manifest create localhost/list
-  buildah manifest add localhost/list localhost/image
-  buildah manifest annotate --annotation A=B localhost/list localhost/image
-  buildah manifest annotate --annotation A=B localhost/list sha256:entryManifestDigest
+  buildah manifest add localhost/list image:tag
+  buildah manifest annotate --annotation A=B localhost/list digest:entryManifestDigest
   buildah manifest inspect localhost/list
   buildah manifest push localhost/list transport:destination
-  buildah manifest remove localhost/list sha256:entryManifestDigest
+  buildah manifest remove localhost/list digest:entryManifestDigest
   buildah manifest rm localhost/list`,
 	}
 	manifestCommand.SetUsageTemplate(UsageTemplate())

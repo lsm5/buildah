@@ -30,6 +30,7 @@ type pullOptions struct {
 	pullPolicy       string
 	retry            int
 	retryDelay       string
+	digestType       string
 }
 
 func init() {
@@ -65,6 +66,7 @@ func init() {
 	flags.BoolVarP(&opts.removeSignatures, "remove-signatures", "", false, "don't copy signatures when pulling image")
 	flags.StringVar(&opts.signaturePolicy, "signature-policy", "", "`pathname` of signature policy file (not usually used)")
 	flags.StringSliceVar(&opts.decryptionKeys, "decryption-key", nil, "key needed to decrypt the image")
+	flags.StringVar(&opts.digestType, "digest", "", "digest type to use (sha256 or sha512)")
 	if err := flags.MarkHidden("signature-policy"); err != nil {
 		panic(fmt.Sprintf("error marking signature-policy as hidden: %v", err))
 	}

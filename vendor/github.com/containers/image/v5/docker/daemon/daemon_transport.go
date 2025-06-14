@@ -10,6 +10,7 @@ import (
 	"github.com/containers/image/v5/internal/image"
 	"github.com/containers/image/v5/transports"
 	"github.com/containers/image/v5/types"
+	storageTypes "github.com/containers/storage/types"
 	"github.com/opencontainers/go-digest"
 )
 
@@ -53,10 +54,24 @@ func (t daemonTransport) ValidatePolicyConfigurationScope(scope string) error {
 // For daemonImageSource, both id and ref are acceptable, ref must not be a NameOnly (interpreted as all tags in that repository by the daemon)
 // For daemonImageDestination, it must be a ref, which is NamedTagged.
 // (We could, in principle, also allow storing images without tagging them, and the user would have to refer to them using the docker image ID = config digest.
-// Using the config digest requires the caller to parse the manifest themselves, which is very cumbersome; so, for now, we don’t bother.)
+// Using the config digest requires the caller to parse the manifest themselves, which is very cumbersome; so, for now, we don't bother.)
 type daemonReference struct {
 	id  digest.Digest
 	ref reference.Named // !reference.IsNameOnly
+}
+
+// getDigestAlgorithm returns the digest algorithm to use based on storage.conf configuration
+func getDigestAlgorithm() digest.Algorithm {
+	storeOptions, err := storageTypes.DefaultStoreOptions()
+	if err != nil {
+		return digest.SHA256
+	}
+	switch storeOptions.DigestType {
+	case "sha512":
+		return digest.SHA512
+	default:
+		return digest.SHA256
+	}
 }
 
 // ParseReference converts a string, which should not start with the ImageTransport.Name prefix, into an ImageReference.
@@ -67,10 +82,10 @@ func ParseReference(refString string) (types.ImageReference, error) {
 	// digest:hexstring is structurally the same as a reponame:tag (meaning docker.io/library/reponame:tag).
 	// reference.ParseAnyReference interprets such strings as digests.
 	if dgst, err := digest.Parse(refString); err == nil {
-		// The daemon explicitly refuses to tag images with a reponame equal to digest.Canonical - but _only_ this digest name.
+		// The daemon explicitly refuses to tag images with a reponame equal to the configured digest algorithm - but _only_ this digest name.
 		// Other digest references are ambiguous, so refuse them.
-		if dgst.Algorithm() != digest.Canonical {
-			return nil, fmt.Errorf("Invalid docker-daemon: reference %s: only digest algorithm %s accepted", refString, digest.Canonical)
+		if dgst.Algorithm() != getDigestAlgorithm() {
+			return nil, fmt.Errorf("Invalid docker-daemon: reference %s: only digest algorithm %s accepted", refString, getDigestAlgorithm())
 		}
 		return NewReference(dgst, nil)
 	}
@@ -79,8 +94,8 @@ func ParseReference(refString string) (types.ImageReference, error) {
 	if err != nil {
 		return nil, err
 	}
-	if reference.FamiliarName(ref) == digest.Canonical.String() {
-		return nil, fmt.Errorf("Invalid docker-daemon: reference %s: The %s repository name is reserved for (non-shortened) digest references", refString, digest.Canonical)
+	if reference.FamiliarName(ref) == getDigestAlgorithm().String() {
+		return nil, fmt.Errorf("Invalid docker-daemon: reference %s: The %s repository name is reserved for (non-shortened) digest references", refString, getDigestAlgorithm())
 	}
 	return NewReference("", ref)
 }
@@ -151,10 +166,10 @@ func (ref daemonReference) DockerReference() reference.Named {
 // Returns "" if configuration identities for these references are not supported.
 func (ref daemonReference) PolicyConfigurationIdentity() string {
 	// We must allow referring to images in the daemon by image ID, otherwise untagged images would not be accessible.
-	// But the existence of image IDs means that we can’t truly well namespace the input:
+	// But the existence of image IDs means that we can't truly well namespace the input:
 	// a single image can be namespaced either using the name or the ID depending on how it is named.
 	//
-	// That’s fairly unexpected, but we have to cope somehow.
+	// That's fairly unexpected, but we have to cope somehow.
 	//
 	// So, use the ordinary docker/policyconfiguration namespacing for named images.
 	// image IDs all fall into the root namespace.

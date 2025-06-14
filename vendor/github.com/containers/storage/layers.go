@@ -435,6 +435,8 @@ type layerStore struct {
 	// FIXME: This field is only set when constructing layerStore, but locking rules of the driver
 	// interface itself are not documented here.
 	driver drivers.Driver
+	// store is a reference to the parent store for accessing digest configuration
+	store *store
 }
 
 func copyLayer(l *Layer) *Layer {
@@ -1165,6 +1167,7 @@ func (s *store) newLayerStore(rundir, layerdir, imagedir string, driver drivers.
 		bymount: make(map[string]*Layer),
 
 		driver: driver,
+		store:  s,
 	}
 	if err := rlstore.startWritingWithReload(false); err != nil {
 		return nil, err
@@ -1182,7 +1185,7 @@ func (s *store) newLayerStore(rundir, layerdir, imagedir string, driver drivers.
 	return &rlstore, nil
 }
 
-func newROLayerStore(rundir string, layerdir string, driver drivers.Driver) (roLayerStore, error) {
+func newROLayerStore(rundir string, layerdir string, driver drivers.Driver, store *store) (roLayerStore, error) {
 	lockfile, err := lockfile.GetROLockFile(filepath.Join(layerdir, "layers.lock"))
 	if err != nil {
 		return nil, err
@@ -1203,6 +1206,7 @@ func newROLayerStore(rundir string, layerdir string, driver drivers.Driver) (roL
 		bymount: make(map[string]*Layer),
 
 		driver: driver,
+		store:  store,
 	}
 	if err := rlstore.startReadingWithReload(false); err != nil {
 		return nil, err
@@ -1634,7 +1638,7 @@ func (r *layerStore) Mount(id string, options drivers.MountOpts) (string, error)
 		options.MountLabel = layer.MountLabel
 	}
 
-	if (options.UidMaps != nil || options.GidMaps != nil) && !r.driver.SupportsShifting() {
+	if (options.UidMaps != nil || options.GidMaps != nil) && !r.driver.SupportsShifting(options.UidMaps, options.GidMaps) {
 		if !reflect.DeepEqual(options.UidMaps, layer.UIDMap) || !reflect.DeepEqual(options.GidMaps, layer.GIDMap) {
 			return "", fmt.Errorf("cannot mount layer %v: shifting not enabled", layer.ID)
 		}
@@ -2368,17 +2372,18 @@ func (r *layerStore) applyDiffWithOptions(to string, layerOptions *LayerOptions,
 	// Decide if we need to compute digests
 	var compressedDigest, uncompressedDigest digest.Digest       // = ""
 	var compressedDigester, uncompressedDigester digest.Digester // = nil
+	digestAlgorithm := r.store.GetDigestAlgorithm()
 	if layerOptions != nil && layerOptions.OriginalDigest != "" &&
-		layerOptions.OriginalDigest.Algorithm() == digest.Canonical {
+		layerOptions.OriginalDigest.Algorithm() == digestAlgorithm {
 		compressedDigest = layerOptions.OriginalDigest
 	} else {
-		compressedDigester = digest.Canonical.Digester()
+		compressedDigester = digestAlgorithm.Digester()
 	}
 	if layerOptions != nil && layerOptions.UncompressedDigest != "" &&
-		layerOptions.UncompressedDigest.Algorithm() == digest.Canonical {
+		layerOptions.UncompressedDigest.Algorithm() == digestAlgorithm {
 		uncompressedDigest = layerOptions.UncompressedDigest
 	} else if compression != archive.Uncompressed {
-		uncompressedDigester = digest.Canonical.Digester()
+		uncompressedDigester = digestAlgorithm.Digester()
 	}
 
 	var compressedWriter io.Writer

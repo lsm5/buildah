@@ -17,6 +17,7 @@ import (
 	"github.com/containers/image/v5/pkg/compression"
 	compressionTypes "github.com/containers/image/v5/pkg/compression/types"
 	"github.com/containers/image/v5/types"
+	storageTypes "github.com/containers/storage/types"
 	digest "github.com/opencontainers/go-digest"
 	imgspecs "github.com/opencontainers/image-spec/specs-go"
 	imgspecv1 "github.com/opencontainers/image-spec/specs-go/v1"
@@ -39,6 +40,20 @@ type tarballBlob struct {
 	contents []byte // or nil to read from filename below
 	filename string // valid if contents == nil
 	size     int64
+}
+
+// getDigestAlgorithm returns the digest algorithm to use based on storage.conf configuration
+func getDigestAlgorithm() digest.Algorithm {
+	storeOptions, err := storageTypes.DefaultStoreOptions()
+	if err != nil {
+		return digest.SHA256
+	}
+	switch storeOptions.DigestType {
+	case "sha512":
+		return digest.SHA512
+	default:
+		return digest.SHA256
+	}
 }
 
 func (r *tarballReference) NewImageSource(ctx context.Context, sys *types.SystemContext) (types.ImageSource, error) {
@@ -84,7 +99,7 @@ func (r *tarballReference) NewImageSource(ctx context.Context, sys *types.System
 		}
 
 		// Set up to digest the file as it is.
-		blobIDdigester := digest.Canonical.Digester()
+		blobIDdigester := getDigestAlgorithm().Digester()
 		reader = io.TeeReader(reader, blobIDdigester.Hash())
 
 		var layerType string
@@ -102,7 +117,7 @@ func (r *tarballReference) NewImageSource(ctx context.Context, sys *types.System
 				}
 				defer uncompressed.Close()
 				// It is compressed, so the diffID is the digest of the uncompressed version
-				diffIDdigester = digest.Canonical.Digester()
+				diffIDdigester = getDigestAlgorithm().Digester()
 				reader = io.TeeReader(uncompressed, diffIDdigester.Hash())
 				switch format.Name() {
 				case compressionTypes.GzipAlgorithmName:
@@ -171,7 +186,7 @@ func (r *tarballReference) NewImageSource(ctx context.Context, sys *types.System
 	if err != nil {
 		return nil, fmt.Errorf("error generating configuration blob for %q: %w", strings.Join(r.filenames, separator), err)
 	}
-	configID := digest.Canonical.FromBytes(configBytes)
+	configID := digest.NewDigestFromBytes(getDigestAlgorithm(), configBytes)
 	blobs[configID] = tarballBlob{
 		contents: configBytes,
 		size:     int64(len(configBytes)),
@@ -217,7 +232,7 @@ func (is *tarballImageSource) Close() error {
 	return nil
 }
 
-// GetBlob returns a stream for the specified blob, and the blob’s size (or -1 if unknown).
+// GetBlob returns a stream for the specified blob, and the blob's size (or -1 if unknown).
 // The Digest field in BlobInfo is guaranteed to be provided, Size may be -1 and MediaType may be optionally provided.
 // May update BlobInfoCache, preferably after it knows for certain that a blob truly exists at a specific location.
 func (is *tarballImageSource) GetBlob(ctx context.Context, blobinfo types.BlobInfo, cache types.BlobInfoCache) (io.ReadCloser, int64, error) {

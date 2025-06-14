@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -69,6 +70,29 @@ func (c chainRetrievalError) Error() string {
 	return fmt.Sprintf("retrieving SEV certificate chain: sevctl: %v", c.err)
 }
 
+func getDigestType() string {
+	// Try to read from CONTAINERS_STORAGE_CONF
+	storageConf := os.Getenv("CONTAINERS_STORAGE_CONF")
+	if storageConf == "" {
+		storageConf = "/etc/containers/storage.conf"
+	}
+
+	// Read the file
+	content, err := os.ReadFile(storageConf)
+	if err != nil {
+		return "sha256" // Default if we can't read the file
+	}
+
+	// Look for digest_type in [storage.options]
+	re := regexp.MustCompile(`(?m)^\[storage\.options\]\s*\n(?:.*\n)*?digest_type\s*=\s*(\w+)`)
+	matches := re.FindStringSubmatch(string(content))
+	if len(matches) > 1 {
+		return matches[1]
+	}
+
+	return "sha256" // Default if not found
+}
+
 // Archive generates a WorkloadConfig for a specified directory and produces a
 // tar archive of a container image's rootfs with the expected contents.
 func Archive(rootfsPath string, ociConfig *v1.Image, options ArchiveOptions) (io.ReadCloser, WorkloadConfig, error) {
@@ -103,7 +127,12 @@ func Archive(rootfsPath string, ociConfig *v1.Image, options ArchiveOptions) (io
 	workloadID := options.WorkloadID
 	if workloadID == "" {
 		digestInput := rootfsPath + filesystem + time.Now().String()
-		workloadID = digest.Canonical.FromString(digestInput).Encoded()
+		digestType := getDigestType()
+		algorithm := digest.Algorithm(digestType)
+		if !algorithm.Available() {
+			algorithm = digest.Canonical // Fallback to the canonical algorithm if the requested one is not available
+		}
+		workloadID = algorithm.FromString(digestInput).Encoded()
 	}
 	workloadConfig := WorkloadConfig{
 		Type:           teeType,

@@ -140,7 +140,12 @@ func importBuilder(ctx context.Context, store storage.Store, options ImportOptio
 		if d, err2 := digest.Parse(builder.FromImageID); err2 == nil {
 			builder.Docker.Parent = docker.ID(d)
 		} else {
-			builder.Docker.Parent = docker.ID(digest.NewDigestFromHex(digest.Canonical.String(), builder.FromImageID))
+			digestType := getDigestType()
+			algorithm := digest.Algorithm(digestType)
+			if !algorithm.Available() {
+				algorithm = digest.Canonical // Fallback to the canonical algorithm if the requested one is not available
+			}
+			builder.Docker.Parent = docker.ID(digest.NewDigestFromHex(algorithm.String(), builder.FromImageID))
 		}
 	}
 	if builder.FromImage != "" {

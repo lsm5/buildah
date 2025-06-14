@@ -2,6 +2,7 @@ package dedup
 
 import (
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -20,6 +21,7 @@ const (
 	DedupHashCRC
 	DedupHashFileSize
 	DedupHashSHA256
+	DedupHashSHA512
 )
 
 type DedupHashMethod int
@@ -59,6 +61,14 @@ func getFileChecksum(hashMethod DedupHashMethod, path string, info fs.FileInfo) 
 			bufRet := make([]byte, 8)
 			binary.BigEndian.PutUint64(bufRet, c.Sum64())
 			return string(bufRet), nil
+		})
+	case DedupHashSHA512:
+		return readAllFile(path, info, func(buf []byte) (string, error) {
+			h := sha512.New()
+			if _, err := h.Write(buf); err != nil {
+				return "", err
+			}
+			return string(h.Sum(nil)), nil
 		})
 	default:
 		return "", fmt.Errorf("unknown hash method: %v", hashMethod)

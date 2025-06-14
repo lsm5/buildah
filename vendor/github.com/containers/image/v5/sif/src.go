@@ -14,6 +14,7 @@ import (
 	"github.com/containers/image/v5/internal/private"
 	"github.com/containers/image/v5/internal/tmpdir"
 	"github.com/containers/image/v5/types"
+	storageTypes "github.com/containers/storage/types"
 	"github.com/opencontainers/go-digest"
 	imgspecs "github.com/opencontainers/image-spec/specs-go"
 	imgspecv1 "github.com/opencontainers/image-spec/specs-go/v1"
@@ -38,6 +39,20 @@ type sifImageSource struct {
 	manifest     []byte
 }
 
+// getDigestAlgorithm returns the digest algorithm to use based on storage.conf configuration
+func getDigestAlgorithm() digest.Algorithm {
+	storeOptions, err := storageTypes.DefaultStoreOptions()
+	if err != nil {
+		return digest.SHA256
+	}
+	switch storeOptions.DigestType {
+	case "sha512":
+		return digest.SHA512
+	default:
+		return digest.SHA256
+	}
+}
+
 // getBlobInfo returns the digest,  and size of the provided file.
 func getBlobInfo(path string) (digest.Digest, int64, error) {
 	f, err := os.Open(path)
@@ -50,7 +65,7 @@ func getBlobInfo(path string) (digest.Digest, int64, error) {
 	// it here again, stream the tar file to a pipe and
 	// compute the digest while writing it to disk.
 	logrus.Debugf("Computing a digest of the SIF conversion output...")
-	digester := digest.Canonical.Digester()
+	digester := getDigestAlgorithm().Digester()
 	// TODO: This can take quite some time, and should ideally be cancellable using ctx.Done().
 	size, err := io.Copy(digester.Hash(), f)
 	if err != nil {
@@ -125,7 +140,7 @@ func newImageSource(ctx context.Context, sys *types.SystemContext, ref sifRefere
 	if err != nil {
 		return nil, fmt.Errorf("generating configuration blob for %q: %w", ref.resolvedFile, err)
 	}
-	configDigest := digest.Canonical.FromBytes(configBytes)
+	configDigest := digest.NewDigestFromBytes(getDigestAlgorithm(), configBytes)
 
 	manifest := imgspecv1.Manifest{
 		Versioned: imgspecs.Versioned{SchemaVersion: 2},
@@ -176,7 +191,7 @@ func (s *sifImageSource) Close() error {
 	return os.RemoveAll(s.workDir)
 }
 
-// GetBlob returns a stream for the specified blob, and the blob’s size (or -1 if unknown).
+// GetBlob returns a stream for the specified blob, and the blob's size (or -1 if unknown).
 // The Digest field in BlobInfo is guaranteed to be provided, Size may be -1 and MediaType may be optionally provided.
 // May update BlobInfoCache, preferably after it knows for certain that a blob truly exists at a specific location.
 func (s *sifImageSource) GetBlob(ctx context.Context, info types.BlobInfo, cache types.BlobInfoCache) (io.ReadCloser, int64, error) {

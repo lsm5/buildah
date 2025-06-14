@@ -170,14 +170,13 @@ func (c *chunkedDiffer) convertTarToZstdChunked(destDirectory string, payload *o
 	}
 
 	newAnnotations := make(map[string]string)
-	level := 1
-	chunked, err := compressor.ZstdCompressor(f, newAnnotations, &level)
+	chunked, err := compressor.NoCompression(f, newAnnotations, digest.SHA256)
 	if err != nil {
 		f.Close()
 		return 0, nil, "", nil, err
 	}
 
-	convertedOutputDigester := digest.Canonical.Digester()
+	convertedOutputDigester := c.layersCache.store.GetDigestAlgorithm().Digester()
 	copied, err := io.CopyBuffer(io.MultiWriter(chunked, convertedOutputDigester.Hash()), diff, c.copyBuffer)
 	if err != nil {
 		f.Close()
@@ -209,10 +208,10 @@ func NewDiffer(ctx context.Context, store storage.Store, blobDigest digest.Diges
 
 	if !pullOptions.enablePartialImages {
 		// If pullOptions.convertImages is set, the two options disagree whether fallback is permissible.
-		// Right now, we enable it, but that’s not a promise; rather, such a configuration should ideally be rejected.
+		// Right now, we enable it, but that's not a promise; rather, such a configuration should ideally be rejected.
 		return nil, newErrFallbackToOrdinaryLayerDownload(errors.New("partial images are disabled"))
 	}
-	// pullOptions.convertImages also serves as a “must not fallback to non-partial pull” option (?!)
+	// pullOptions.convertImages also serves as a "must not fallback to non-partial pull" option (?!)
 
 	graphDriver, err := store.GraphDriver()
 	if err != nil {
@@ -268,7 +267,7 @@ func (e errFallbackCanConvert) Unwrap() error {
 }
 
 // getProperDiffer is an implementation detail of NewDiffer.
-// It returns a “proper” differ (not a convert_images one) if possible.
+// It returns a "proper" differ (not a convert_images one) if possible.
 // May return an error matching ErrFallbackToOrdinaryLayerDownload if a fallback to an alternative
 // (either makeConvertFromRawDiffer, or a non-partial pull) is permissible.
 func getProperDiffer(store storage.Store, blobDigest digest.Digest, blobSize int64, annotations map[string]string, iss ImageSourceSeekable, pullOptions pullOptions) (graphdriver.Differ, error) {
@@ -341,7 +340,7 @@ func makeConvertFromRawDiffer(store storage.Store, blobDigest digest.Digest, blo
 // makeZstdChunkedDiffer sets up a chunkedDiffer for a zstd:chunked layer.
 // It may return an error matching ErrFallbackToOrdinaryLayerDownload / errFallbackCanConvert.
 func makeZstdChunkedDiffer(store storage.Store, blobSize int64, tocDigest digest.Digest, annotations map[string]string, iss ImageSourceSeekable, pullOptions pullOptions) (_ *chunkedDiffer, retErr error) {
-	manifest, toc, tarSplit, tocOffset, err := readZstdChunkedManifest(store.RunRoot(), iss, tocDigest, annotations)
+	manifest, toc, tarSplit, tocOffset, err := readZstdChunkedManifest(store.RunRoot(), iss, tocDigest, annotations, true, store.GetDigestAlgorithm())
 	if err != nil { // May be ErrFallbackToOrdinaryLayerDownload / errFallbackCanConvert
 		return nil, fmt.Errorf("read zstd:chunked manifest: %w", err)
 	}
@@ -400,7 +399,7 @@ func makeEstargzChunkedDiffer(store storage.Store, blobSize int64, tocDigest dig
 		}
 	}
 
-	manifest, tocOffset, err := readEstargzChunkedManifest(iss, blobSize, tocDigest)
+	manifest, tocOffset, err := readEstargzChunkedManifest(iss, blobSize, tocDigest, store.GetDigestAlgorithm())
 	if err != nil { // May be ErrFallbackToOrdinaryLayerDownload / errFallbackCanConvert
 		return nil, fmt.Errorf("read zstd:chunked manifest: %w", err)
 	}
@@ -666,20 +665,17 @@ func (o *originFile) OpenFile() (io.ReadCloser, error) {
 	return srcFile, nil
 }
 
-func (c *chunkedDiffer) prepareCompressedStreamToFile(partCompression compressedFileType, from io.Reader, mf *missingFileChunk) (compressedFileType, error) {
+func (c *chunkedDiffer) prepareCompressedStreamToFile(partCompression compressedFileType, mf *missingFileChunk) (compressedFileType, error) {
 	switch {
 	case partCompression == fileTypeHole:
 		// The entire part is a hole.  Do not need to read from a file.
-		c.rawReader = nil
 		return fileTypeHole, nil
 	case mf.Hole:
 		// Only the missing chunk in the requested part refers to a hole.
 		// The received data must be discarded.
-		limitReader := io.LimitReader(from, mf.CompressedSize)
-		_, err := io.CopyBuffer(io.Discard, limitReader, c.copyBuffer)
+		_, err := io.CopyBuffer(io.Discard, c.rawReader, c.copyBuffer)
 		return fileTypeHole, err
 	case partCompression == fileTypeZstdChunked:
-		c.rawReader = io.LimitReader(from, mf.CompressedSize)
 		if c.zstdReader == nil {
 			r, err := zstd.NewReader(c.rawReader)
 			if err != nil {
@@ -692,7 +688,6 @@ func (c *chunkedDiffer) prepareCompressedStreamToFile(partCompression compressed
 			}
 		}
 	case partCompression == fileTypeEstargz:
-		c.rawReader = io.LimitReader(from, mf.CompressedSize)
 		if c.gzipReader == nil {
 			r, err := pgzip.NewReader(c.rawReader)
 			if err != nil {
@@ -705,7 +700,7 @@ func (c *chunkedDiffer) prepareCompressedStreamToFile(partCompression compressed
 			}
 		}
 	case partCompression == fileTypeNoCompression:
-		c.rawReader = io.LimitReader(from, mf.UncompressedSize)
+		return fileTypeNoCompression, nil
 	default:
 		return partCompression, fmt.Errorf("unknown file type %q", c.fileType)
 	}
@@ -777,7 +772,7 @@ type destinationFile struct {
 	recordFsVerity recordFsVerityFunc
 }
 
-func openDestinationFile(dirfd int, metadata *fileMetadata, options *archive.TarOptions, skipValidation bool, recordFsVerity recordFsVerityFunc) (*destinationFile, error) {
+func openDestinationFile(dirfd int, metadata *fileMetadata, options *archive.TarOptions, skipValidation bool, recordFsVerity recordFsVerityFunc, digestAlgorithm digest.Algorithm) (*destinationFile, error) {
 	file, err := openFileUnderRoot(dirfd, metadata.Name, newFileFlags, 0)
 	if err != nil {
 		return nil, err
@@ -790,7 +785,7 @@ func openDestinationFile(dirfd int, metadata *fileMetadata, options *archive.Tar
 	if skipValidation {
 		to = file
 	} else {
-		digester = digest.Canonical.Digester()
+		digester = digestAlgorithm.Digester()
 		hash = digester.Hash()
 		to = io.MultiWriter(file, hash)
 	}
@@ -905,6 +900,7 @@ func (c *chunkedDiffer) storeMissingFiles(streams chan io.ReadCloser, errs chan 
 	for _, missingPart := range missingParts {
 		var part io.ReadCloser
 		partCompression := c.fileType
+		readingFromLocalFile := false
 		switch {
 		case missingPart.Hole:
 			partCompression = fileTypeHole
@@ -915,6 +911,7 @@ func (c *chunkedDiffer) storeMissingFiles(streams chan io.ReadCloser, errs chan 
 				return err
 			}
 			partCompression = fileTypeNoCompression
+			readingFromLocalFile = true
 		case missingPart.SourceChunk != nil:
 			select {
 			case p := <-streams:
@@ -948,7 +945,18 @@ func (c *chunkedDiffer) storeMissingFiles(streams chan io.ReadCloser, errs chan 
 				goto exit
 			}
 
-			compression, err := c.prepareCompressedStreamToFile(partCompression, part, &mf)
+			c.rawReader = nil
+			if part != nil {
+				limit := mf.CompressedSize
+				// If we are reading from a source file, use the uncompressed size to limit the reader, because
+				// the compressed size refers to the original layer stream.
+				if readingFromLocalFile {
+					limit = mf.UncompressedSize
+				}
+				c.rawReader = io.LimitReader(part, limit)
+			}
+
+			compression, err := c.prepareCompressedStreamToFile(partCompression, &mf)
 			if err != nil {
 				Err = err
 				goto exit
@@ -977,7 +985,7 @@ func (c *chunkedDiffer) storeMissingFiles(streams chan io.ReadCloser, errs chan 
 				if c.useFsVerity == graphdriver.DifferFsVerityDisabled {
 					recordFsVerity = nil
 				}
-				destFile, err = openDestinationFile(dirfd, mf.File, options, c.skipValidation, recordFsVerity)
+				destFile, err = openDestinationFile(dirfd, mf.File, options, c.skipValidation, recordFsVerity, c.layersCache.store.GetDigestAlgorithm())
 				if err != nil {
 					Err = err
 					goto exit
@@ -1355,7 +1363,7 @@ func (c *chunkedDiffer) copyAllBlobToFile(destination *os.File) (digest.Digest, 
 		return "", err
 	}
 
-	originalRawDigester := digest.Canonical.Digester()
+	originalRawDigester := c.layersCache.store.GetDigestAlgorithm().Digester()
 	for soe := range streamsOrErrors {
 		if soe.stream != nil {
 			r := io.TeeReader(soe.stream, originalRawDigester.Hash())
@@ -1440,7 +1448,9 @@ func (c *chunkedDiffer) ApplyDiff(dest string, options *archive.TarOptions, diff
 		if err != nil {
 			return graphdriver.DriverWithDifferOutput{}, err
 		}
+
 		c.uncompressedTarSize = tarSize
+
 		// fileSource is a O_TMPFILE file descriptor, so we
 		// need to keep it open until the entire file is processed.
 		defer fileSource.Close()
@@ -1456,7 +1466,7 @@ func (c *chunkedDiffer) ApplyDiff(dest string, options *archive.TarOptions, diff
 		if tocDigest == nil {
 			return graphdriver.DriverWithDifferOutput{}, fmt.Errorf("internal error: just-created zstd:chunked missing TOC digest")
 		}
-		manifest, toc, tarSplit, tocOffset, err := readZstdChunkedManifest(dest, fileSource, *tocDigest, annotations)
+		manifest, toc, tarSplit, tocOffset, err := readZstdChunkedManifest(dest, fileSource, *tocDigest, annotations, false, c.layersCache.store.GetDigestAlgorithm())
 		if err != nil {
 			return graphdriver.DriverWithDifferOutput{}, fmt.Errorf("read zstd:chunked manifest: %w", err)
 		}
@@ -1465,7 +1475,7 @@ func (c *chunkedDiffer) ApplyDiff(dest string, options *archive.TarOptions, diff
 		stream = fileSource
 
 		// fill the chunkedDiffer with the data we just read.
-		c.fileType = fileTypeZstdChunked
+		c.fileType = fileTypeNoCompression
 		c.manifest = manifest
 		c.toc = toc
 		c.tarSplit = tarSplit
@@ -1811,7 +1821,7 @@ func (c *chunkedDiffer) ApplyDiff(dest string, options *archive.TarOptions, diff
 				if err != nil {
 					return output, err
 				}
-				if offset >= 0 && validateChunkChecksum(chunk, root, path, offset, c.copyBuffer) {
+				if offset >= 0 && validateChunkChecksum(chunk, root, path, offset, c.copyBuffer, c.layersCache.store.GetDigestAlgorithm()) {
 					missingPartsSize -= size
 					mp.OriginFile = &originFile{
 						Root:   root,
@@ -1846,7 +1856,7 @@ func (c *chunkedDiffer) ApplyDiff(dest string, options *archive.TarOptions, diff
 	// To ensure that consumers of the layer who decompress and read the full tar stream,
 	// and consumers who consume the data via the TOC, both see exactly the same data and metadata,
 	// compute the UncompressedDigest.
-	// c/image will then ensure that this value matches the value in the image config’s RootFS.DiffID, i.e. the image must commit
+	// c/image will then ensure that this value matches the value in the image config's RootFS.DiffID, i.e. the image must commit
 	// to one UncompressedDigest value for each layer, and that will avoid the ambiguity (in consumers who validate layers against DiffID).
 	//
 	// c/image also uses the UncompressedDigest as a layer ID, allowing it to use the traditional layer and image IDs.
@@ -1868,7 +1878,7 @@ func (c *chunkedDiffer) ApplyDiff(dest string, options *archive.TarOptions, diff
 			}
 			metadata := tsStorage.NewJSONUnpacker(output.TarSplit)
 			fg := newStagedFileGetter(dirFile, flatPathNameMap)
-			digester := digest.Canonical.Digester()
+			digester := c.layersCache.store.GetDigestAlgorithm().Digester()
 			if err := asm.WriteOutputTarStream(fg, metadata, digester.Hash()); err != nil {
 				return output, fmt.Errorf("digesting staged uncompressed stream: %w", err)
 			}
@@ -1976,7 +1986,7 @@ func (c *chunkedDiffer) mergeTocEntries(fileType compressedFileType, entries []m
 
 // validateChunkChecksum checks if the file at $root/$path[offset:chunk.ChunkSize] has the
 // same digest as chunk.ChunkDigest
-func validateChunkChecksum(chunk *minimal.FileMetadata, root, path string, offset int64, copyBuffer []byte) bool {
+func validateChunkChecksum(chunk *minimal.FileMetadata, root, path string, offset int64, copyBuffer []byte, digestAlgorithm digest.Algorithm) bool {
 	parentDirfd, err := unix.Open(root, unix.O_PATH|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return false
@@ -1994,7 +2004,7 @@ func validateChunkChecksum(chunk *minimal.FileMetadata, root, path string, offse
 	}
 
 	r := io.LimitReader(fd, chunk.ChunkSize)
-	digester := digest.Canonical.Digester()
+	digester := digestAlgorithm.Digester()
 
 	if _, err := io.CopyBuffer(digester.Hash(), r, copyBuffer); err != nil {
 		return false

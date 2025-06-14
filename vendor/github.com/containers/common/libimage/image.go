@@ -471,7 +471,7 @@ func (i *Image) removeRecursive(ctx context.Context, rmMap map[string]*RemoveIma
 	// error.
 	if referencedBy != "" && numNames != 1 {
 		byID := strings.HasPrefix(i.ID(), referencedBy)
-		byDigest := strings.HasPrefix(referencedBy, "sha256:")
+		byDigest := strings.HasPrefix(referencedBy, getDigestAlgorithm().String()+":")
 		if !options.Force {
 			if byID && numNames > 1 {
 				return processedIDs, fmt.Errorf("unable to delete image %q by ID with more than one tag (%s): please force removal", i.ID(), i.Names())
@@ -574,7 +574,7 @@ var errTagDigest = errors.New("tag by digest not supported")
 // Tag the image with the specified name and store it in the local containers
 // storage.  The name is normalized according to the rules of NormalizeName.
 func (i *Image) Tag(name string) error {
-	if strings.HasPrefix(name, "sha256:") { // ambiguous input
+	if strings.HasPrefix(name, getDigestAlgorithm().String()+":") { // ambiguous input
 		return fmt.Errorf("%s: %w", name, errTagDigest)
 	}
 
@@ -610,7 +610,7 @@ var errUntagDigest = errors.New("untag by digest not supported")
 // the local containers storage.  The name is normalized according to the rules
 // of NormalizeName.
 func (i *Image) Untag(name string) error {
-	if strings.HasPrefix(name, "sha256:") { // ambiguous input
+	if strings.HasPrefix(name, getDigestAlgorithm().String()+":") { // ambiguous input
 		return fmt.Errorf("%s: %w", name, errUntagDigest)
 	}
 

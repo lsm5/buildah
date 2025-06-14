@@ -24,11 +24,26 @@ import (
 	"github.com/containers/image/v5/transports"
 	"github.com/containers/image/v5/types"
 	chunkedToc "github.com/containers/storage/pkg/chunked/toc"
+	storageTypes "github.com/containers/storage/types"
 	digest "github.com/opencontainers/go-digest"
 	imgspecv1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/sirupsen/logrus"
 	"github.com/vbauerster/mpb/v8"
 )
+
+// getDigestAlgorithm returns the digest algorithm to use based on storage.conf configuration
+func getDigestAlgorithm() digest.Algorithm {
+	storeOptions, err := storageTypes.DefaultStoreOptions()
+	if err != nil {
+		return digest.SHA256
+	}
+	switch storeOptions.DigestType {
+	case "sha512":
+		return digest.SHA512
+	default:
+		return digest.SHA256
+	}
+}
 
 // imageCopier tracks state specific to a single image (possibly an item of a manifest list)
 type imageCopier struct {
@@ -151,9 +166,9 @@ func (c *copier) copySingleImage(ctx context.Context, unparsedImage *image.Unpar
 		ic.compressionFormat = c.options.DestinationCtx.CompressionFormat
 		ic.compressionLevel = c.options.DestinationCtx.CompressionLevel
 	}
-	// HACK: Don’t combine zstd:chunked and encryption.
+	// HACK: Don't combine zstd:chunked and encryption.
 	// zstd:chunked can only usefully be consumed using range requests of parts of the layer, which would require the encryption
-	// to support decrypting arbitrary subsets of the stream. That’s plausible but not supported using the encryption API we have.
+	// to support decrypting arbitrary subsets of the stream. That's plausible but not supported using the encryption API we have.
 	// Also, the chunked metadata is exposed in annotations unencrypted, which reveals the TOC digest = layer identity without
 	// encryption. (That can be determined from the unencrypted config anyway, but, still...)
 	//
@@ -174,11 +189,11 @@ func (c *copier) copySingleImage(ctx context.Context, unparsedImage *image.Unpar
 	}
 
 	// Decide whether we can substitute blobs with semantic equivalents:
-	// - Don’t do that if we can’t modify the manifest at all
+	// - Don't do that if we can't modify the manifest at all
 	// - Ensure _this_ copy sees exactly the intended data when either processing a signed image or signing it.
 	//   This may be too conservative, but for now, better safe than sorry, _especially_ on the len(c.signers) != 0 path:
 	//   The signature makes the content non-repudiable, so it very much matters that the signature is made over exactly what the user intended.
-	//   We do intend the RecordDigestUncompressedPair calls to only work with reliable data, but at least there’s a risk
+	//   We do intend the RecordDigestUncompressedPair calls to only work with reliable data, but at least there's a risk
 	//   that the compressed version coming from a third party may be designed to attack some other decompressor implementation,
 	//   and we would reuse and sign it.
 	ic.canSubstituteBlobs = ic.cannotModifyManifestReason == "" && len(c.signers) == 0
@@ -258,15 +273,15 @@ func (c *copier) copySingleImage(ctx context.Context, unparsedImage *image.Unpar
 		isManifestRejected := errors.As(err, &manifestTypeRejectedError)
 		isCompressionIncompatible := errors.As(err, &manifestLayerCompressionIncompatibilityError)
 		if (!isManifestRejected && !isCompressionIncompatible) || len(ic.manifestConversionPlan.otherMIMETypeCandidates) == 0 {
-			// We don’t have other options.
+			// We don't have other options.
 			// In principle the code below would handle this as well, but the resulting  error message is fairly ugly.
-			// Don’t bother the user with MIME types if we have no choice.
+			// Don't bother the user with MIME types if we have no choice.
 			return copySingleImageResult{}, err
 		}
 		// If the original MIME type is acceptable, determineManifestConversion always uses it as ic.manifestConversionPlan.preferredMIMEType.
 		// So if we are here, we will definitely be trying to convert the manifest.
 		// With ic.cannotModifyManifestReason != "", that would just be a string of repeated failures for the same reason,
-		// so let’s bail out early and with a better error message.
+		// so let's bail out early and with a better error message.
 		if ic.cannotModifyManifestReason != "" {
 			return copySingleImageResult{}, fmt.Errorf("writing manifest failed and we cannot try conversions: %q: %w", cannotModifyManifestReason, err)
 		}
@@ -501,7 +516,7 @@ func (ic *imageCopier) copyLayers(ctx context.Context) ([]compressiontypes.Algor
 			}
 		}
 
-		if len(*ic.c.options.OciEncryptLayers) == 0 { // “encrypt all layers”
+		if len(*ic.c.options.OciEncryptLayers) == 0 { // "encrypt all layers"
 			for i := 0; i < len(srcInfos); i++ {
 				layersToEncrypt.Add(i)
 			}
@@ -720,11 +735,11 @@ func (ic *imageCopier) copyLayer(ctx context.Context, srcInfo types.BlobInfo, to
 	}
 	// When encrypting to decrypting, only use the simple code path. We might be able to optimize more
 	// (e.g. if we know the DiffID of an encrypted compressed layer, it might not be necessary to pull, decrypt and decompress again),
-	// but it’s not trivially safe to do such things, so until someone takes the effort to make a comprehensive argument, let’s not.
+	// but it's not trivially safe to do such things, so until someone takes the effort to make a comprehensive argument, let's not.
 	encryptingOrDecrypting := toEncrypt || (isOciEncrypted(srcInfo.MediaType) && ic.c.options.OciDecryptConfig != nil)
 	canAvoidProcessingCompleteLayer := !diffIDIsNeeded && !encryptingOrDecrypting
 
-	// Don’t read the layer from the source if we already have the blob, and optimizations are acceptable.
+	// Don't read the layer from the source if we already have the blob, and optimizations are acceptable.
 	if canAvoidProcessingCompleteLayer {
 		canChangeLayerCompression := ic.src.CanChangeLayerCompression(srcInfo.MediaType)
 		logrus.Debugf("Checking if we can reuse blob %s: general substitution = %v, compression for MIME type %q = %v",
@@ -812,6 +827,7 @@ func (ic *imageCopier) copyLayer(ctx context.Context, srcInfo types.BlobInfo, to
 			}
 			uploadedBlob, err := ic.c.dest.PutBlobPartial(ctx, &proxy, srcInfo, private.PutBlobPartialOptions{
 				Cache:      ic.c.blobInfoCache,
+				EmptyLayer: emptyLayer,
 				LayerIndex: layerIndex,
 			})
 			if err == nil {
@@ -870,10 +886,10 @@ func (ic *imageCopier) copyLayer(ctx context.Context, srcInfo types.BlobInfo, to
 					return types.BlobInfo{}, "", fmt.Errorf("computing layer DiffID: %w", diffIDResult.err)
 				}
 				logrus.Debugf("Computed DiffID %s for layer %s", diffIDResult.digest, srcInfo.Digest)
-				// Don’t record any associations that involve encrypted data. This is a bit crude,
+				// Don't record any associations that involve encrypted data. This is a bit crude,
 				// some blob substitutions (replacing pulls of encrypted data with local reuse of known decryption outcomes)
-				// might be safe, but it’s not trivially obvious, so let’s be conservative for now.
-				// This crude approach also means we don’t need to record whether a blob is encrypted
+				// might be safe, but it's not trivially obvious, so let's be conservative for now.
+				// This crude approach also means we don't need to record whether a blob is encrypted
 				// in the blob info cache (which would probably be necessary for any more complex logic),
 				// and the simplicity is attractive.
 				if !encryptingOrDecrypting {
@@ -900,7 +916,7 @@ func updatedBlobInfoFromReuse(inputInfo types.BlobInfo, reusedBlob private.Reuse
 		Digest: reusedBlob.Digest,
 		Size:   reusedBlob.Size,
 		URLs:   nil, // This _must_ be cleared if Digest changes; clear it in other cases as well, to preserve previous behavior.
-		// FIXME: This should remove zstd:chunked annotations IF the original was chunked and the new one isn’t
+		// FIXME: This should remove zstd:chunked annotations IF the original was chunked and the new one isn't
 		// (but those annotations being left with incorrect values should not break pulls).
 		Annotations:          maps.Clone(inputInfo.Annotations),
 		MediaType:            inputInfo.MediaType, // Mostly irrelevant, MediaType is updated based on Compression*/CryptoOperation.
@@ -928,7 +944,7 @@ func updatedBlobInfoFromReuse(inputInfo types.BlobInfo, reusedBlob private.Reuse
 	return res
 }
 
-// copyLayerFromStream is an implementation detail of copyLayer; mostly providing a separate “defer” scope.
+// copyLayerFromStream is an implementation detail of copyLayer; mostly providing a separate "defer" scope.
 // it copies a blob with srcInfo (with known Digest and Annotations and possibly known Size) from srcStream to dest,
 // perhaps (de/re/)compressing the stream,
 // and returns a complete blobInfo of the copied blob and perhaps a <-chan diffIDResult if diffIDIsNeeded, to be read by the caller.
@@ -947,7 +963,7 @@ func (ic *imageCopier) copyLayerFromStream(ctx context.Context, srcStream io.Rea
 
 		getDiffIDRecorder = func(decompressor compressiontypes.DecompressorFunc) io.Writer {
 			// If this fails, e.g. because we have exited and due to pipeWriter.CloseWithError() above further
-			// reading from the pipe has failed, we don’t really care.
+			// reading from the pipe has failed, we don't really care.
 			// We only read from diffIDChan if the rest of the flow has succeeded, and when we do read from it,
 			// the return value includes an error indication, which we do check.
 			//
@@ -986,7 +1002,7 @@ func computeDiffID(stream io.Reader, decompressor compressiontypes.DecompressorF
 		stream = s
 	}
 
-	return digest.Canonical.FromReader(stream)
+	return getDigestAlgorithm().FromReader(stream)
 }
 
 // algorithmsByNames returns slice of Algorithms from a sequence of Algorithm Names

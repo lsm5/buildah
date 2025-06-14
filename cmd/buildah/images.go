@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -363,4 +365,25 @@ func matchesReference(name, argName string) bool {
 		return strings.HasSuffix(splitName[0], splitArg[0]) && (splitName[1] == splitArg[1])
 	}
 	return strings.HasSuffix(splitName[0], argName)
+}
+
+func getDigestType() string {
+	confPath := os.Getenv("CONTAINERS_STORAGE_CONF")
+	if confPath == "" {
+		confPath = "/etc/containers/storage.conf"
+	}
+	conf, err := os.ReadFile(confPath)
+	if err != nil {
+		return "sha256" // Default to sha256 if we can't read the config
+	}
+	re := regexp.MustCompile(`(?m)^digest_type\s*=\s*"([^"]+)"`)
+	matches := re.FindStringSubmatch(string(conf))
+	if len(matches) > 1 {
+		return matches[1]
+	}
+	return "sha256" // Default to sha256 if not specified
+}
+
+func getImageID(id string) string {
+	return getDigestType() + ":" + id
 }

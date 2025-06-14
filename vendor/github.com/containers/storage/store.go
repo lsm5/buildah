@@ -174,6 +174,7 @@ const (
 	DedupHashCRC      = dedup.DedupHashCRC
 	DedupHashFileSize = dedup.DedupHashFileSize
 	DedupHashSHA256   = dedup.DedupHashSHA256
+	DedupHashSHA512   = dedup.DedupHashSHA512
 )
 
 type (
@@ -201,6 +202,12 @@ type Store interface {
 	PullOptions() map[string]string
 	UIDMap() []idtools.IDMap
 	GIDMap() []idtools.IDMap
+
+	// GetDigestType returns the configured digest type for the store.
+	GetDigestType() string
+
+	// GetDigestAlgorithm returns the digest algorithm based on the configured digest type.
+	GetDigestAlgorithm() digest.Algorithm
 
 	// GraphDriver obtains and returns a handle to the graph Driver object used
 	// by the Store.
@@ -464,7 +471,7 @@ type Store interface {
 	ImageRunDirectory(id string) (string, error)
 
 	// ListLayerBigData retrieves a list of the (possibly large) chunks of
-	// named data associated with a layer.
+	// named data associated with an layer.
 	ListLayerBigData(id string) ([]string, error)
 
 	// LayerBigData retrieves a (possibly large) chunk of named data
@@ -656,7 +663,7 @@ type LayerOptions struct {
 	// not the tarstream.
 	// Use nil if not applicable or not known.
 	OriginalSize *int64
-	// UncompressedDigest specifies a digest of the uncompressed version (“DiffID”)
+	// UncompressedDigest specifies a digest of the uncompressed version ("DiffID")
 	// of the tarstream (diff), if one is provided along with these LayerOptions,
 	// and reliably known by the caller.
 	// Use the default "" if this fields is not applicable or the value is not known.
@@ -751,7 +758,7 @@ type store struct {
 	//   because (??) the Shutdown may forcibly unmount and clean up, affecting graph driver state in a way only a graph driver
 	//   and layer store reinitialization can notice.
 	// - Ensures that store.Shutdown is exclusive with mount operations. This is necessary at because some
-	//   graph drivers call mount.MakePrivate() during initialization, the mount operations require that, and the driver’s Cleanup() method
+	//   graph drivers call mount.MakePrivate() during initialization, the mount operations require that, and the driver's Cleanup() method
 	//   may undo that. So, holding graphLock is required throughout the duration of Shutdown(), and the duration of any mount
 	//   (but not unmount) calls.
 	// - Within this store object, protects access to some related in-memory state.
@@ -773,6 +780,7 @@ type store struct {
 	digestLockRoot  string
 	disableVolatile bool
 	transientStore  bool
+	digestType      string
 
 	// The following fields can only be accessed with graphLock held.
 	graphLockLastWrite lockfile.LastWrite
@@ -782,7 +790,7 @@ type store struct {
 	layerStoreUseGetters    rwLayerStore   // Almost all users should use the provided accessors instead of accessing this field directly.
 	roLayerStoresUseGetters []roLayerStore // Almost all users should use the provided accessors instead of accessing this field directly.
 
-	// FIXME: The following fields need locking, and don’t have it.
+	// FIXME: The following fields need locking, and don't have it.
 	additionalUIDs *idSet // Set by getAvailableIDs()
 	additionalGIDs *idSet // Set by getAvailableIDs()
 }
@@ -904,6 +912,7 @@ func GetStore(options types.StoreOptions) (Store, error) {
 		autoNsMaxSize:       autoNsMaxSize,
 		disableVolatile:     options.DisableVolatile,
 		transientStore:      options.TransientStore,
+		digestType:          options.DigestType,
 
 		additionalUIDs: nil,
 		additionalGIDs: nil,
@@ -986,7 +995,7 @@ func (s *store) load() error {
 	if err := os.MkdirAll(gipath, 0o700); err != nil {
 		return err
 	}
-	imageStore, err := newImageStore(gipath)
+	imageStore, err := newImageStore(gipath, s.digestType)
 	if err != nil {
 		return err
 	}
@@ -1003,7 +1012,7 @@ func (s *store) load() error {
 		return err
 	}
 
-	rcs, err := newContainerStore(gcpath, rcpath, s.transientStore)
+	rcs, err := newContainerStore(gcpath, rcpath, s.transientStore, s.digestType)
 	if err != nil {
 		return err
 	}
@@ -1020,14 +1029,14 @@ func (s *store) load() error {
 		var ris roImageStore
 		// both the graphdriver and the imagestore must be used read-write.
 		if store == s.imageStoreDir || store == s.graphRoot {
-			imageStore, err := newImageStore(gipath)
+			imageStore, err := newImageStore(gipath, s.digestType)
 			if err != nil {
 				return err
 			}
 			s.rwImageStores = append(s.rwImageStores, imageStore)
 			ris = imageStore
 		} else {
-			ris, err = newROImageStore(gipath)
+			ris, err = newROImageStore(gipath, s.digestType)
 			if err != nil {
 				if errors.Is(err, syscall.EROFS) {
 					logrus.Debugf("Ignoring creation of lockfiles on read-only file systems %q, %v", gipath, err)
@@ -1075,7 +1084,7 @@ func (s *store) startUsingGraphDriver() error {
 		}
 		// Our concurrency design requires s.graphDriverName not to be modified after
 		// store is constructed.
-		// It’s fine for driver.String() not to match the requested graph driver name
+		// It's fine for driver.String() not to match the requested graph driver name
 		// (e.g. if the user asks for overlay2 and gets overlay), but it must be an idempotent
 		// mapping:
 		//	driver1 := drivers.New(userInput, config)
@@ -1177,7 +1186,7 @@ func (s *store) getROLayerStoresLocked() ([]roLayerStore, error) {
 	for _, store := range s.graphDriver.AdditionalImageStores() {
 		glpath := filepath.Join(store, driverPrefix+"layers")
 
-		rls, err := newROLayerStore(rlpath, glpath, s.graphDriver)
+		rls, err := newROLayerStore(rlpath, glpath, s.graphDriver, s)
 		if err != nil {
 			return nil, err
 		}
@@ -1445,16 +1454,7 @@ func (s *store) writeToAllStores(fn func(rlstore rwLayerStore) error) error {
 // On entry:
 // - rlstore must be locked for writing
 func (s *store) canUseShifting(uidmap, gidmap []idtools.IDMap) bool {
-	if !s.graphDriver.SupportsShifting() {
-		return false
-	}
-	if uidmap != nil && !idtools.IsContiguous(uidmap) {
-		return false
-	}
-	if gidmap != nil && !idtools.IsContiguous(gidmap) {
-		return false
-	}
-	return true
+	return s.graphDriver.SupportsShifting(uidmap, gidmap)
 }
 
 // On entry:
@@ -1517,7 +1517,7 @@ func (s *store) putLayer(rlstore rwLayerStore, rlstores []roLayerStore, id, pare
 			gidMap = ilayer.GIDMap
 		}
 	} else {
-		// FIXME? It’s unclear why we are holding containerStore locked here at all
+		// FIXME? It's unclear why we are holding containerStore locked here at all
 		// (and because we are not modifying it, why it is a write lock, not a read lock).
 		if err := s.containerStore.startWriting(); err != nil {
 			return nil, -1, err
@@ -3699,7 +3699,7 @@ func (s *store) Shutdown(force bool) ([]string, error) {
 		err = fmt.Errorf("a layer is mounted: %w", ErrLayerUsedByContainer)
 	}
 	if err == nil {
-		// We don’t retain the lastWrite value, and treat this update as if someone else did the .Cleanup(),
+		// We don't retain the lastWrite value, and treat this update as if someone else did the .Cleanup(),
 		// so that we reload after a .Shutdown() the same way other processes would.
 		// Shutdown() is basically an error path, so reliability is more important than performance.
 		if _, err2 := s.graphLock.RecordWrite(); err2 != nil {
@@ -3750,7 +3750,7 @@ func copySlicePreferringNil[S ~[]E, E any](s S) S {
 // copyMapPreferringNil returns a shallow clone of map m.
 // If m is empty, a nil is returned.
 //
-// (As of, e.g., Go 1.23, maps.Clone preserves nil, but that’s not a documented promise;
+// (As of, e.g., Go 1.23, maps.Clone preserves nil, but that's not a documented promise;
 // and this function turns even non-nil empty maps into nil.)
 func copyMapPreferringNil[K comparable, V any](m map[K]V) map[K]V {
 	if len(m) == 0 {
@@ -3964,4 +3964,35 @@ func (s *store) Dedup(req DedupArgs) (drivers.DedupResult, error) {
 		}
 		return rlstore.dedup(r)
 	})
+}
+
+func (s *store) GetDigestType() string {
+	if s.digestType == "" {
+		return "sha256" // default value
+	}
+	return s.digestType
+}
+
+// GetDigestAlgorithm returns the digest algorithm based on the configured digest type
+func (s *store) GetDigestAlgorithm() digest.Algorithm {
+	switch s.GetDigestType() {
+	case "sha512":
+		return digest.SHA512
+	case "sha256":
+		fallthrough
+	default:
+		return digest.SHA256
+	}
+}
+
+// getDigestAlgorithmFromType returns the digest algorithm for a given digest type string
+func getDigestAlgorithmFromType(digestType string) digest.Algorithm {
+	switch digestType {
+	case "sha512":
+		return digest.SHA512
+	case "sha256":
+		fallthrough
+	default:
+		return digest.SHA256
+	}
 }

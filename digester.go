@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"os"
+	"regexp"
 	"sync"
 	"time"
 
@@ -25,8 +27,36 @@ type simpleDigester struct {
 	contentType string
 }
 
+func getDigestType() string {
+	// Try to read from CONTAINERS_STORAGE_CONF
+	storageConf := os.Getenv("CONTAINERS_STORAGE_CONF")
+	if storageConf == "" {
+		storageConf = "/etc/containers/storage.conf"
+	}
+
+	// Read the file
+	content, err := os.ReadFile(storageConf)
+	if err != nil {
+		return "sha256" // Default if we can't read the file
+	}
+
+	// Look for digest_type in [storage.options]
+	re := regexp.MustCompile(`(?m)^\[storage\.options\]\s*\n(?:.*\n)*?digest_type\s*=\s*(\w+)`)
+	matches := re.FindStringSubmatch(string(content))
+	if len(matches) > 1 {
+		return matches[1]
+	}
+
+	return "sha256" // Default if not found
+}
+
 func newSimpleDigester(contentType string) digester {
-	finalDigester := digest.Canonical.Digester()
+	digestType := getDigestType()
+	algorithm := digest.Algorithm(digestType)
+	if !algorithm.Available() {
+		algorithm = digest.Canonical // Fallback to the canonical algorithm if the requested one is not available
+	}
+	finalDigester := algorithm.Digester()
 	return &simpleDigester{
 		digester:    finalDigester,
 		hasher:      finalDigester.Hash(),
@@ -271,6 +301,11 @@ func (c *CompositeDigester) Digest() (string, digest.Digest) {
 			}
 			content += contentType + digester.Digest().Encoded()
 		}
-		return "multi", digest.Canonical.FromString(content)
+		digestType := getDigestType()
+		algorithm := digest.Algorithm(digestType)
+		if !algorithm.Available() {
+			algorithm = digest.Canonical // Fallback to the canonical algorithm if the requested one is not available
+		}
+		return "multi", algorithm.FromString(content)
 	}
 }

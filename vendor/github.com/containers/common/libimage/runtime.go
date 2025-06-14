@@ -273,9 +273,10 @@ func (r *Runtime) LookupImage(name string, options *LookupImageOptions) (*Image,
 
 	byDigest := false
 	originalName := name
-	if strings.HasPrefix(name, "sha256:") {
+	digestPrefix := getDigestAlgorithm().String() + ":"
+	if strings.HasPrefix(name, digestPrefix) {
 		byDigest = true
-		name = strings.TrimPrefix(name, "sha256:")
+		name = strings.TrimPrefix(name, digestPrefix)
 	}
 	byFullID := reference.IsFullIdentifier(name)
 

@@ -9,10 +9,31 @@ import (
 	"github.com/containers/image/v5/pkg/compression/internal"
 	"github.com/containers/image/v5/pkg/compression/types"
 	"github.com/containers/storage/pkg/chunked/compressor"
+	storageTypes "github.com/containers/storage/types"
 	"github.com/klauspost/pgzip"
+	"github.com/opencontainers/go-digest"
 	"github.com/sirupsen/logrus"
 	"github.com/ulikunitz/xz"
 )
+
+// getDigestAlgorithm returns the digest algorithm to use based on storage.conf configuration
+func getDigestAlgorithm() digest.Algorithm {
+	storeOptions, err := storageTypes.DefaultStoreOptions()
+	if err != nil {
+		return digest.SHA256
+	}
+	switch storeOptions.DigestType {
+	case "sha512":
+		return digest.SHA512
+	default:
+		return digest.SHA256
+	}
+}
+
+// zstdChunkedCompressor is a wrapper around compressor.ZstdCompressor that adapts the signature
+func zstdChunkedCompressor(r io.Writer, metadata map[string]string, level *int) (io.WriteCloser, error) {
+	return compressor.ZstdCompressor(r, metadata, level, getDigestAlgorithm())
+}
 
 // Algorithm is a compression algorithm that can be used for CompressStream.
 type Algorithm = types.Algorithm
@@ -32,7 +53,7 @@ var (
 		[]byte{0x28, 0xb5, 0x2f, 0xfd}, ZstdDecompressor, zstdCompressor)
 	// ZstdChunked is a Zstd compression with chunk metadata which allows random access to individual files.
 	ZstdChunked = internal.NewAlgorithm(types.ZstdChunkedAlgorithmName, types.ZstdAlgorithmName,
-		nil, ZstdDecompressor, compressor.ZstdCompressor)
+		nil, ZstdDecompressor, zstdChunkedCompressor)
 
 	compressionAlgorithms = map[string]Algorithm{
 		Gzip.Name():        Gzip,
@@ -123,7 +144,7 @@ func DetectCompressionFormat(input io.Reader) (Algorithm, DecompressorFunc, io.R
 
 	n, err := io.ReadAtLeast(input, buffer[:], len(buffer))
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
-		// This is a “real” error. We could just ignore it this time, process the data we have, and hope that the source will report the same error again.
+		// This is a "real" error. We could just ignore it this time, process the data we have, and hope that the source will report the same error again.
 		// Instead, fail immediately with the original error cause instead of a possibly secondary/misleading error returned later.
 		return Algorithm{}, nil, nil, err
 	}

@@ -145,9 +145,10 @@ type rwContainerStore interface {
 type containerStore struct {
 	// The following fields are only set when constructing containerStore, and must never be modified afterwards.
 	// They are safe to access without any other locking.
-	lockfile *lockfile.LockFile // Synchronizes readers vs. writers of the _filesystem data_, both cross-process and in-process.
-	dir      string
-	jsonPath [numContainerLocationIndex]string
+	lockfile   *lockfile.LockFile // Synchronizes readers vs. writers of the _filesystem data_, both cross-process and in-process.
+	dir        string
+	jsonPath   [numContainerLocationIndex]string
+	digestType string
 
 	inProcessLock sync.RWMutex // Can _only_ be obtained with lockfile held.
 	// The following fields can only be read/written with read/write ownership of inProcessLock, respectively.
@@ -286,7 +287,7 @@ func (r *containerStore) startReading() error {
 		r.inProcessLock.RUnlock()
 		unlockFn = r.lockfile.Unlock
 
-		// r.lastWrite can change at this point if another goroutine reloads the store before us. That’s why we don’t unconditionally
+		// r.lastWrite can change at this point if another goroutine reloads the store before us. That's why we don't unconditionally
 		// trigger a load below; we (lock and) reloadIfChanged() again.
 
 		// First try reloading with r.lockfile held for reading.
@@ -294,8 +295,8 @@ func (r *containerStore) startReading() error {
 		// each will re-check on-disk state vs. r.lastWrite, and the first one will actually reload the data.
 		var tryLockedForWriting bool
 		if err := inProcessLocked(func() error {
-			// We could optimize this further: The r.lockfile.GetLastWrite() value shouldn’t change as long as we hold r.lockfile,
-			// so if r.lastWrite was already updated, we don’t need to actually read the on-filesystem lock.
+			// We could optimize this further: The r.lockfile.GetLastWrite() value shouldn't change as long as we hold r.lockfile,
+			// so if r.lastWrite was already updated, we don't need to actually read the on-filesystem lock.
 			var err error
 			tryLockedForWriting, err = r.reloadIfChanged(false)
 			return err
@@ -303,7 +304,7 @@ func (r *containerStore) startReading() error {
 			if !tryLockedForWriting {
 				return err
 			}
-			// Not good enough, we need r.lockfile held for writing. So, let’s do that.
+			// Not good enough, we need r.lockfile held for writing. So, let's do that.
 			unlockFn()
 			unlockFn = nil
 
@@ -324,7 +325,7 @@ func (r *containerStore) startReading() error {
 			// after we released the lock.
 			// If that, _again_, finds inconsistent state, just give up.
 			// We could, plausibly, retry a few times, but that inconsistent state (duplicate container names)
-			// shouldn’t be saved (by correct implementations) in the first place.
+			// shouldn't be saved (by correct implementations) in the first place.
 			if err := inProcessLocked(func() error {
 				_, err := r.reloadIfChanged(false)
 				return err
@@ -333,12 +334,12 @@ func (r *containerStore) startReading() error {
 			}
 		}
 
-		// NOTE that we hold neither a read nor write inProcessLock at this point. That’s fine in ordinary operation, because
+		// NOTE that we hold neither a read nor write inProcessLock at this point. That's fine in ordinary operation, because
 		// the on-filesystem r.lockfile should protect us against (cooperating) writers, and any use of r.inProcessLock
 		// protects us against in-process writers modifying data.
 		// In presence of non-cooperating writers, we just ensure that 1) the in-memory data is not clearly out-of-date
 		// and 2) access to the in-memory data is not racy;
-		// but we can’t protect against those out-of-process writers modifying _files_ while we are assuming they are in a consistent state.
+		// but we can't protect against those out-of-process writers modifying _files_ while we are assuming they are in a consistent state.
 
 		r.inProcessLock.RLock()
 	}
@@ -571,7 +572,7 @@ func (r *containerStore) saveFor(modifiedContainer *Container) error {
 	return r.save(containerLocation(modifiedContainer))
 }
 
-func newContainerStore(dir string, runDir string, transient bool) (rwContainerStore, error) {
+func newContainerStore(dir string, runDir string, transient bool, digestType string) (rwContainerStore, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
@@ -587,8 +588,9 @@ func newContainerStore(dir string, runDir string, transient bool) (rwContainerSt
 		return nil, err
 	}
 	cstore := containerStore{
-		lockfile: lockfile,
-		dir:      dir,
+		lockfile:   lockfile,
+		dir:        dir,
+		digestType: digestType,
 		jsonPath: [numContainerLocationIndex]string{
 			filepath.Join(dir, "containers.json"),
 			filepath.Join(volatileDir, "volatile-containers.json"),
@@ -703,7 +705,7 @@ func (r *containerStore) create(id string, names []string, image, layer string, 
 		container.Flags[volatileFlag] = true
 	}
 	r.containers = append(r.containers, container)
-	// This can only fail on duplicate IDs, which shouldn’t happen — and in
+	// This can only fail on duplicate IDs, which shouldn't happen — and in
 	// that case the index is already in the desired state anyway.
 	// Implementing recovery from an unlikely and unimportant failure here
 	// would be too risky.
@@ -790,8 +792,8 @@ func (r *containerStore) Delete(id string) error {
 	}
 	id = container.ID
 	delete(r.byid, id)
-	// This can only fail if the ID is already missing, which shouldn’t happen — and in that case the index is already in the desired state anyway.
-	// The store’s Delete method is used on various paths to recover from failures, so this should be robust against partially missing data.
+	// This can only fail if the ID is already missing, which shouldn't happen — and in that case the index is already in the desired state anyway.
+	// The store's Delete method is used on various paths to recover from failures, so this should be robust against partially missing data.
 	_ = r.idindex.Delete(id)
 	delete(r.bylayer, container.LayerID)
 	for _, name := range container.Names {
@@ -932,7 +934,8 @@ func (r *containerStore) SetBigData(id, key string, data []byte) error {
 			c.BigDataDigests = make(map[string]digest.Digest)
 		}
 		oldDigest, digestOk := c.BigDataDigests[key]
-		newDigest := digest.Canonical.FromBytes(data)
+		digestAlgorithm := getDigestAlgorithmFromType(r.digestType)
+		newDigest := digestAlgorithm.FromBytes(data)
 		c.BigDataDigests[key] = newDigest
 		if !sizeOk || oldSize != c.BigDataSizes[key] || !digestOk || oldDigest != newDigest {
 			save = true

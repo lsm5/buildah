@@ -47,6 +47,7 @@ type pushOptions struct {
 	encryptLayers          []int
 	insecure               bool
 	addCompression         []string
+	digestType             string
 }
 
 func init() {
@@ -99,6 +100,7 @@ func init() {
 	flags.StringVar(&opts.signaturePolicy, "signature-policy", "", "`pathname` of signature policy file (not usually used)")
 	flags.StringSliceVar(&opts.encryptionKeys, "encryption-key", nil, "key with the encryption protocol to use needed to encrypt the image (e.g. jwe:/path/to/key.pem)")
 	flags.IntSliceVar(&opts.encryptLayers, "encrypt-layer", nil, "layers to encrypt, 0-indexed layer indices with support for negative indexing (e.g. 0 is the first layer, -1 is the last layer). If not defined, will encrypt all layers if encryption-key flag is specified")
+	flags.StringVar(&opts.digestType, "digest", "", "digest type to use (sha256 or sha512)")
 
 	if err := flags.MarkHidden("signature-policy"); err != nil {
 		panic(fmt.Sprintf("error marking signature-policy as hidden: %v", err))
@@ -119,6 +121,20 @@ func pushCmd(c *cobra.Command, args []string, iopts pushOptions) error {
 	}
 	if err := auth.CheckAuthFile(iopts.authfile); err != nil {
 		return err
+	}
+
+	// Handle digest type if specified
+	if iopts.digestType != "" {
+		if iopts.digestType != "sha256" && iopts.digestType != "sha512" {
+			return fmt.Errorf("unsupported digest type %q, must be one of: sha256, sha512", iopts.digestType)
+		}
+		// Create temporary storage.conf with digest type
+		tempConf, err := createTempStorageConf(iopts.digestType)
+		if err != nil {
+			return fmt.Errorf("creating temporary storage.conf: %w", err)
+		}
+		defer os.Remove(tempConf)
+		os.Setenv("CONTAINERS_STORAGE_CONF", tempConf)
 	}
 
 	switch len(args) {

@@ -24,6 +24,7 @@ const (
 type inspectResults struct {
 	format      string
 	inspectType string
+	digestType  string
 }
 
 func init() {
@@ -49,6 +50,7 @@ func init() {
 	flags.SetInterspersed(false)
 	flags.StringVarP(&opts.format, "format", "f", "", "use `format` as a Go template to format the output")
 	flags.StringVarP(&opts.inspectType, "type", "t", inspectTypeContainer, "look at the item of the specified `type` (container or image) and name")
+	flags.StringVar(&opts.digestType, "digest", "", "digest type to use (sha256 or sha512)")
 
 	rootCmd.AddCommand(inspectCommand)
 }
@@ -64,6 +66,20 @@ func inspectCmd(c *cobra.Command, args []string, iopts inspectResults) error {
 	}
 	if len(args) > 1 {
 		return errors.New("too many arguments specified")
+	}
+
+	// Handle digest type if specified
+	if iopts.digestType != "" {
+		if iopts.digestType != "sha256" && iopts.digestType != "sha512" {
+			return fmt.Errorf("unsupported digest type %q, must be one of: sha256, sha512", iopts.digestType)
+		}
+		// Create temporary storage.conf with digest type
+		tempConf, err := createTempStorageConf(iopts.digestType)
+		if err != nil {
+			return fmt.Errorf("creating temporary storage.conf: %w", err)
+		}
+		defer os.Remove(tempConf)
+		os.Setenv("CONTAINERS_STORAGE_CONF", tempConf)
 	}
 
 	systemContext, err := parse.SystemContextFromOptions(c)

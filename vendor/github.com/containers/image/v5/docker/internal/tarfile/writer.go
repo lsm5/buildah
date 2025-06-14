@@ -18,9 +18,24 @@ import (
 	"github.com/containers/image/v5/internal/set"
 	"github.com/containers/image/v5/manifest"
 	"github.com/containers/image/v5/types"
+	storageTypes "github.com/containers/storage/types"
 	"github.com/opencontainers/go-digest"
 	"github.com/sirupsen/logrus"
 )
+
+// getDigestAlgorithm returns the digest algorithm to use based on storage.conf configuration
+func getDigestAlgorithm() digest.Algorithm {
+	storeOptions, err := storageTypes.DefaultStoreOptions()
+	if err != nil {
+		return digest.SHA256
+	}
+	switch storeOptions.DigestType {
+	case "sha512":
+		return digest.SHA512
+	default:
+		return digest.SHA256
+	}
+}
 
 // Writer allows creating a (docker save)-formatted tar archive containing one or more images.
 type Writer struct {
@@ -148,14 +163,14 @@ func (w *Writer) writeLegacyMetadataLocked(layerDescriptors []manifest.Schema2De
 		if chainID == "" {
 			chainID = l.Digest
 		} else {
-			chainID = digest.Canonical.FromString(chainID.String() + " " + l.Digest.String())
+			chainID = getDigestAlgorithm().FromString(chainID.String() + " " + l.Digest.String())
 		}
 		// … but note that the image ID does not _exactly_ match docker/docker/image/v1.CreateID, primarily because
 		// we create the image configs differently in details. At least recent versions allocate new IDs on load,
 		// so this is fine as long as the IDs we use are unique / cannot loop.
 		//
 		// For intermediate images, we could just use the chainID as an image ID, but using a digest of ~the created
-		// config makes sure that everything uses the same “namespace”; a bit less efficient but clearer.
+		// config makes sure that everything uses the same "namespace"; a bit less efficient but clearer.
 		//
 		// Temporarily add the chainID to the config, only for the purpose of generating the image ID.
 		layerConfig["layer_id"] = chainID
@@ -164,7 +179,7 @@ func (w *Writer) writeLegacyMetadataLocked(layerDescriptors []manifest.Schema2De
 			return fmt.Errorf("marshaling layer config: %w", err)
 		}
 		delete(layerConfig, "layer_id")
-		layerID := digest.Canonical.FromBytes(b).Encoded()
+		layerID := getDigestAlgorithm().FromBytes(b).Encoded()
 		layerConfig["id"] = layerID
 
 		configBytes, err := json.Marshal(layerConfig)
@@ -192,7 +207,7 @@ func (w *Writer) writeLegacyMetadataLocked(layerDescriptors []manifest.Schema2De
 }
 
 // checkManifestItemsMatch checks that a and b describe the same image,
-// and returns an error if that’s not the case (which should never happen).
+// and returns an error if that's not the case (which should never happen).
 func checkManifestItemsMatch(a, b *ManifestItem) error {
 	if a.Config != b.Config {
 		return fmt.Errorf("Internal error: Trying to reuse ManifestItem values with configs %#v vs. %#v", a.Config, b.Config)
@@ -201,7 +216,7 @@ func checkManifestItemsMatch(a, b *ManifestItem) error {
 		return fmt.Errorf("Internal error: Trying to reuse ManifestItem values with layers %#v vs. %#v", a.Layers, b.Layers)
 	}
 	// Ignore RepoTags, that will be built later.
-	// Ignore Parent and LayerSources, which we don’t set to anything meaningful.
+	// Ignore Parent and LayerSources, which we don't set to anything meaningful.
 	return nil
 }
 
@@ -226,7 +241,7 @@ func (w *Writer) ensureManifestItemLocked(layerDescriptors []manifest.Schema2Des
 		Config:       configPath,
 		RepoTags:     []string{},
 		Layers:       layerPaths,
-		Parent:       "", // We don’t have this information
+		Parent:       "", // We don't have this information
 		LayerSources: nil,
 	}
 	if i, ok := w.manifestByConfig[configDigest]; ok {
@@ -251,7 +266,7 @@ func (w *Writer) ensureManifestItemLocked(layerDescriptors []manifest.Schema2Des
 		//
 		// Doing it this way to include the normalized-out `docker.io[/library]` does make
 		// a difference for github.com/projectatomic/docker consumers, with the
-		// “Add --add-registry and --block-registry options to docker daemon” patch.
+		// "Add --add-registry and --block-registry options to docker daemon" patch.
 		// These consumers treat reference strings which include a hostname and reference
 		// strings without a hostname differently.
 		//

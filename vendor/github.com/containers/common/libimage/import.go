@@ -128,5 +128,5 @@ func (r *Runtime) Import(ctx context.Context, path string, options *ImportOption
 		}
 	}
 
-	return "sha256:" + name, nil
+	return getDigestAlgorithm().String() + ":" + name, nil
 }

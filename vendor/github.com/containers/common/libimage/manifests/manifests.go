@@ -37,6 +37,7 @@ import (
 	"github.com/containers/storage/pkg/fileutils"
 	"github.com/containers/storage/pkg/ioutils"
 	"github.com/containers/storage/pkg/lockfile"
+	storageTypes "github.com/containers/storage/types"
 	digest "github.com/opencontainers/go-digest"
 	imgspec "github.com/opencontainers/image-spec/specs-go"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
@@ -765,7 +766,7 @@ func (l *list) AddArtifact(ctx context.Context, sys *types.SystemContext, option
 			defer f.Close()
 
 			// Hang on to a copy of the first 512 bytes, but digest the whole thing.
-			digester := digest.Canonical.Digester()
+			digester := getDigestAlgorithm().Digester()
 			writeCounter := ioutils.NewWriteCounter(digester.Hash())
 			var detectableData bytes.Buffer
 			_, err = io.CopyN(writeCounter, io.TeeReader(f, &detectableData), 512)
@@ -855,7 +856,7 @@ func (l *list) AddArtifact(ctx context.Context, sys *types.SystemContext, option
 			if err != nil {
 				return "", fmt.Errorf("recording artifact config data file %q: %w", options.ConfigFile, err)
 			}
-			digester := digest.Canonical.Digester()
+			digester := getDigestAlgorithm().Digester()
 			counter := ioutils.NewWriteCounter(digester.Hash())
 			if err := func() error {
 				f, err := os.Open(filePath)
@@ -876,7 +877,7 @@ func (l *list) AddArtifact(ctx context.Context, sys *types.SystemContext, option
 			configFilePath = filePath
 		} else {
 			decoder := bytes.NewReader(configDescriptor.Data)
-			digester := digest.Canonical.Digester()
+			digester := getDigestAlgorithm().Digester()
 			counter := ioutils.NewWriteCounter(digester.Hash())
 			if _, err := io.Copy(counter, decoder); err != nil {
 				return "", fmt.Errorf("digesting inlined artifact config data: %w", err)
@@ -886,7 +887,7 @@ func (l *list) AddArtifact(ctx context.Context, sys *types.SystemContext, option
 		}
 	} else {
 		configDescriptor.Data = nil
-		configDescriptor.Digest = digest.Canonical.FromString("")
+		configDescriptor.Digest = getDigestAlgorithm().FromString("")
 	}
 
 	// Construct the manifest.
@@ -964,9 +965,23 @@ func LockerForImage(store storage.Store, image string) (lockfile.Locker, error) 
 	if err != nil {
 		return nil, fmt.Errorf("locating image %q for locating lock: %w", image, err)
 	}
-	d := digest.NewDigestFromEncoded(digest.Canonical, img.ID)
+	d := digest.NewDigestFromEncoded(getDigestAlgorithm(), img.ID)
 	if err := d.Validate(); err != nil {
 		return nil, fmt.Errorf("coercing image ID for %q into a digest: %w", image, err)
 	}
 	return store.GetDigestLock(d)
+}
+
+// getDigestAlgorithm returns the digest algorithm to use based on storage.conf configuration
+func getDigestAlgorithm() digest.Algorithm {
+	storeOptions, err := storageTypes.DefaultStoreOptions()
+	if err != nil {
+		return digest.SHA256
+	}
+	switch storeOptions.DigestType {
+	case "sha512":
+		return digest.SHA512
+	default:
+		return digest.SHA256
+	}
 }

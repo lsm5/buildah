@@ -48,7 +48,7 @@ func typeToTarType(t string) (byte, error) {
 
 // readEstargzChunkedManifest reads the estargz manifest from the seekable stream blobStream.
 // It may return an error matching ErrFallbackToOrdinaryLayerDownload / errFallbackCanConvert.
-func readEstargzChunkedManifest(blobStream ImageSourceSeekable, blobSize int64, tocDigest digest.Digest) ([]byte, int64, error) {
+func readEstargzChunkedManifest(blobStream ImageSourceSeekable, blobSize int64, tocDigest digest.Digest, digestAlgorithm digest.Algorithm) ([]byte, int64, error) {
 	// information on the format here https://github.com/containerd/stargz-snapshotter/blob/main/docs/stargz-estargz.md
 	footerSize := int64(51)
 	if blobSize <= footerSize {
@@ -146,7 +146,7 @@ func readEstargzChunkedManifest(blobStream ImageSourceSeekable, blobSize int64, 
 		return nil, 0, errors.New("manifest not found")
 	}
 
-	manifestDigester := digest.Canonical.Digester()
+	manifestDigester := digestAlgorithm.Digester()
 	manifestChecksum := manifestDigester.Hash()
 	if _, err := manifestChecksum.Write(manifestUncompressed); err != nil {
 		return nil, 0, err
@@ -183,9 +183,12 @@ func openTmpFileNoTmpFile(tmpDir string) (*os.File, error) {
 // tmpDir is a directory where the tar-split temporary file is written to.  The file is opened with
 // O_TMPFILE so that it is automatically removed when it is closed.
 // Returns (manifest blob, parsed manifest, tar-split file or nil, manifest offset).
-// The opened tar-split file’s position is unspecified.
+// The opened tar-split file's position is unspecified.
 // It may return an error matching ErrFallbackToOrdinaryLayerDownload / errFallbackCanConvert.
-func readZstdChunkedManifest(tmpDir string, blobStream ImageSourceSeekable, tocDigest digest.Digest, annotations map[string]string) (_ []byte, _ *minimal.TOC, _ *os.File, _ int64, retErr error) {
+// The compressed parameter indicates whether the manifest and tar-split data are zstd-compressed
+// (true) or stored uncompressed (false).  Uncompressed data is used only for an optimization to convert
+// a regular OCI layer to zstd:chunked when convert_images is set, and it is not used for distributed images.
+func readZstdChunkedManifest(tmpDir string, blobStream ImageSourceSeekable, tocDigest digest.Digest, annotations map[string]string, compressed bool, digestAlgorithm digest.Algorithm) (_ []byte, _ *minimal.TOC, _ *os.File, _ int64, retErr error) {
 	offsetMetadata := annotations[minimal.ManifestInfoKey]
 	if offsetMetadata == "" {
 		return nil, nil, nil, 0, fmt.Errorf("%q annotation missing", minimal.ManifestInfoKey)
@@ -261,11 +264,11 @@ func readZstdChunkedManifest(tmpDir string, blobStream ImageSourceSeekable, tocD
 		return nil, nil, nil, 0, err
 	}
 
-	decodedBlob, err := decodeAndValidateBlob(manifest, manifestLengthUncompressed, tocDigest.String())
+	decodedBlob, err := decodeAndValidateBlob(manifest, manifestLengthUncompressed, tocDigest.String(), compressed)
 	if err != nil {
 		return nil, nil, nil, 0, fmt.Errorf("validating and decompressing TOC: %w", err)
 	}
-	toc, err := unmarshalToc(decodedBlob)
+	toc, err := unmarshalTocWithDigestAlgorithm(decodedBlob, digestAlgorithm)
 	if err != nil {
 		return nil, nil, nil, 0, fmt.Errorf("unmarshaling TOC: %w", err)
 	}
@@ -288,7 +291,7 @@ func readZstdChunkedManifest(tmpDir string, blobStream ImageSourceSeekable, tocD
 				decodedTarSplit.Close()
 			}
 		}()
-		if err := decodeAndValidateBlobToStream(tarSplit, decodedTarSplit, toc.TarSplitDigest.String()); err != nil {
+		if err := decodeAndValidateBlobToStream(tarSplit, decodedTarSplit, toc.TarSplitDigest.String(), compressed); err != nil {
 			return nil, nil, nil, 0, fmt.Errorf("validating and decompressing tar-split: %w", err)
 		}
 		// We use the TOC for creating on-disk files, but the tar-split for creating metadata
@@ -298,7 +301,7 @@ func readZstdChunkedManifest(tmpDir string, blobStream ImageSourceSeekable, tocD
 			return nil, nil, nil, 0, fmt.Errorf("tar-split and TOC data is inconsistent: %w", err)
 		}
 	} else if tarSplitChunk.Offset > 0 {
-		// We must ignore the tar-split when the digest is not present in the TOC, because we can’t authenticate it.
+		// We must ignore the tar-split when the digest is not present in the TOC, because we can't authenticate it.
 		//
 		// But if we asked for the chunk, now we must consume the data to not block the producer.
 		// Ideally the GetBlobAt API should be changed so that this is not necessary.
@@ -339,7 +342,7 @@ func ensureTOCMatchesTarSplit(toc *minimal.TOC, tarSplit *os.File) error {
 			return fmt.Errorf("determining expected metadata for %q: %w", hdr.Name, err)
 		}
 		if err := ensureFileMetadataAttributesMatch(e, &expected); err != nil {
-			return fmt.Errorf("TOC and tar-split metadata doesn’t match: %w", err)
+			return fmt.Errorf("TOC and tar-split metadata doesn't match: %w", err)
 		}
 
 		return nil
@@ -373,7 +376,7 @@ func tarSizeFromTarSplit(tarSplit io.Reader) (int64, error) {
 		case storage.SegmentType:
 			res += int64(len(entry.Payload))
 		case storage.FileType:
-			// entry.Size is the “logical size”, which might not be the physical size for sparse entries;
+			// entry.Size is the "logical size", which might not be the physical size for sparse entries;
 			// but the way tar-split/tar/asm.WriteOutputTarStream combines FileType entries and returned files contents,
 			// sparse files are not supported.
 			// Also https://github.com/opencontainers/image-spec/blob/main/layer.md says
@@ -388,7 +391,7 @@ func tarSizeFromTarSplit(tarSplit io.Reader) (int64, error) {
 
 // ensureTimePointersMatch ensures that a and b are equal
 func ensureTimePointersMatch(a, b *time.Time) error {
-	// We didn’t always use “timeIfNotZero” when creating the TOC, so treat time.IsZero the same as nil.
+	// We didn't always use "timeIfNotZero" when creating the TOC, so treat time.IsZero the same as nil.
 	// The archive/tar code turns time.IsZero() timestamps into an Unix timestamp of 0 when writing, but turns an Unix timestamp of 0
 	// when writing into a (local-timezone) Jan 1 1970, which is not IsZero(). So, treat that the same as IsZero as well.
 	unixZero := time.Unix(0, 0)
@@ -487,9 +490,13 @@ func validateBlob(blob []byte, expectedCompressedChecksum string) error {
 	return nil
 }
 
-func decodeAndValidateBlob(blob []byte, lengthUncompressed uint64, expectedCompressedChecksum string) ([]byte, error) {
+func decodeAndValidateBlob(blob []byte, lengthUncompressed uint64, expectedCompressedChecksum string, compressed bool) ([]byte, error) {
 	if err := validateBlob(blob, expectedCompressedChecksum); err != nil {
 		return nil, err
+	}
+
+	if !compressed {
+		return blob, nil
 	}
 
 	decoder, err := zstd.NewReader(nil)
@@ -502,8 +509,13 @@ func decodeAndValidateBlob(blob []byte, lengthUncompressed uint64, expectedCompr
 	return decoder.DecodeAll(blob, b)
 }
 
-func decodeAndValidateBlobToStream(blob []byte, w *os.File, expectedCompressedChecksum string) error {
+func decodeAndValidateBlobToStream(blob []byte, w *os.File, expectedCompressedChecksum string, compressed bool) error {
 	if err := validateBlob(blob, expectedCompressedChecksum); err != nil {
+		return err
+	}
+
+	if !compressed {
+		_, err := w.Write(blob)
 		return err
 	}
 
