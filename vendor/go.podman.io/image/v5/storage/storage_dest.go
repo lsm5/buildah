@@ -193,6 +193,11 @@ func (s *storageImageDestination) Reference() types.ImageReference {
 	return s.imageRef
 }
 
+// GetDigestAlgorithm returns the digest algorithm configured for the destination.
+func (s *storageImageDestination) GetDigestAlgorithm() digest.Algorithm {
+	return s.imageRef.transport.store.GetDigestAlgorithm()
+}
+
 // Close cleans up the temporary directory and additional layer store handlers.
 func (s *storageImageDestination) Close() error {
 	// This is outside of the scope of HasThreadSafePutBlob, so we don’t need to hold s.lock.
@@ -1122,7 +1127,7 @@ func (s *storageImageDestination) createNewLayer(index int, trusted trustedLayer
 			}
 		}
 
-		flags := make(map[string]interface{})
+		flags := make(map[string]any)
 		if untrustedUncompressedDigest != "" {
 			flags[expectedLayerDiffIDFlag] = untrustedUncompressedDigest.String()
 			logrus.Debugf("Setting uncompressed digest to %q for layer %q", untrustedUncompressedDigest, newLayerID)

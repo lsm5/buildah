@@ -75,7 +75,7 @@ type Runtime struct {
 	systemContext types.SystemContext
 }
 
-// Returns a copy of the runtime's system context.
+// SystemContext returns a copy of the runtime's system context.
 func (r *Runtime) SystemContext() *types.SystemContext {
 	return r.systemContextCopy()
 }
@@ -152,6 +152,16 @@ func (r *Runtime) Shutdown(force bool) error {
 	return err
 }
 
+// GetDigestAlgorithm returns the current digest algorithm used by the runtime.
+func (r *Runtime) GetDigestAlgorithm() digest.Algorithm {
+	return r.store.GetDigestAlgorithm()
+}
+
+// SetDigestAlgorithm sets the digest algorithm to be used by the runtime.
+func (r *Runtime) SetDigestAlgorithm(algorithm digest.Algorithm) error {
+	return r.store.SetDigestAlgorithm(algorithm)
+}
+
 // storageToImage transforms a storage.Image to an Image.
 func (r *Runtime) storageToImage(storageImage *storage.Image, ref types.ImageReference) *Image {
 	return &Image{
@@ -161,7 +171,7 @@ func (r *Runtime) storageToImage(storageImage *storage.Image, ref types.ImageRef
 	}
 }
 
-// getImagesAndLayers obtains consistent slices of Image and storage.Layer
+// getImagesAndLayers obtains consistent slices of Image and storage.Layer.
 func (r *Runtime) getImagesAndLayers() ([]*Image, []storage.Layer, error) {
 	snapshot, err := r.store.MultiList(
 		storage.MultiListOptions{
@@ -225,7 +235,7 @@ type LookupImageOptions struct {
 
 var errNoHexValue = errors.New("invalid format: no 64-byte hexadecimal value")
 
-// Lookup Image looks up `name` in the local container storage.  Returns the
+// LookupImage looks up `name` in the local container storage.  Returns the
 // image and the name it has been found with.  Note that name may also use the
 // `containers-storage:` prefix used to refer to the containers-storage
 // transport.  Returns storage.ErrImageUnknown if the image could not be found.
@@ -276,6 +286,9 @@ func (r *Runtime) LookupImage(name string, options *LookupImageOptions) (*Image,
 	if strings.HasPrefix(name, "sha256:") {
 		byDigest = true
 		name = strings.TrimPrefix(name, "sha256:")
+	} else if strings.HasPrefix(name, "sha512:") {
+		byDigest = true
+		name = strings.TrimPrefix(name, "sha512:")
 	}
 	byFullID := reference.IsFullIdentifier(name)
 

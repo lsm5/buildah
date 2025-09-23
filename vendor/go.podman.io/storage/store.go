@@ -610,6 +610,12 @@ type Store interface {
 
 	// Dedup deduplicates layers in the store.
 	Dedup(DedupArgs) (drivers.DedupResult, error)
+
+	// GetDigestAlgorithm returns the current digest algorithm used by the store.
+	GetDigestAlgorithm() digest.Algorithm
+
+	// SetDigestAlgorithm sets the digest algorithm to be used by the store.
+	SetDigestAlgorithm(algorithm digest.Algorithm) error
 }
 
 // AdditionalLayer represents a layer that is contained in the additional layer store
@@ -783,9 +789,12 @@ type store struct {
 	layerStoreUseGetters    rwLayerStore   // Almost all users should use the provided accessors instead of accessing this field directly.
 	roLayerStoresUseGetters []roLayerStore // Almost all users should use the provided accessors instead of accessing this field directly.
 
-	// FIXME: The following fields need locking, and don’t have it.
+	// FIXME: The following fields need locking, and don't have it.
 	additionalUIDs *idSet // Set by getAvailableIDs()
 	additionalGIDs *idSet // Set by getAvailableIDs()
+
+	// Current digest algorithm type (sha256, sha512, etc.)
+	digestAlgorithm digest.Algorithm
 }
 
 // GetStore attempts to find an already-created Store object matching the
@@ -3496,7 +3505,6 @@ func (s *store) ImagesByTopLayer(id string) ([]*Image, error) {
 			return struct{}{}, true, err
 		}
 		for _, image := range imageList {
-			image := image
 			if image.TopLayer == layer.ID || stringutils.InSlice(image.MappedTopLayers, layer.ID) {
 				images = append(images, &image)
 			}
@@ -3990,4 +3998,27 @@ func (s *store) Dedup(req DedupArgs) (drivers.DedupResult, error) {
 		}
 		return rlstore.dedup(r)
 	})
+}
+
+// GetDigestAlgorithm returns the current digest algorithm used by the store.
+func (s *store) GetDigestAlgorithm() digest.Algorithm {
+	if s.digestAlgorithm == "" {
+		return digest.Canonical // Default to sha256 if not set
+	}
+	return s.digestAlgorithm
+}
+
+// SetDigestAlgorithm sets the digest algorithm to be used by the store.
+func (s *store) SetDigestAlgorithm(algorithm digest.Algorithm) error {
+	// Validate the digest type
+	switch algorithm {
+	case digest.SHA256, digest.SHA512:
+		s.digestAlgorithm = algorithm
+		return nil
+	case "":
+		s.digestAlgorithm = digest.Canonical // Default to sha256
+		return nil
+	default:
+		return fmt.Errorf("unsupported digest algorithm: %q", algorithm)
+	}
 }

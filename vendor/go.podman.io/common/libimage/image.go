@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -173,12 +174,7 @@ func (i *Image) Digests() []digest.Digest {
 // hasDigest returns whether the specified value matches any digest of the
 // image.
 func (i *Image) hasDigest(wantedDigest digest.Digest) bool {
-	for _, d := range i.Digests() {
-		if d == wantedDigest {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(i.Digests(), wantedDigest)
 }
 
 // containsDigestPrefix returns whether the specified value matches any digest of the
@@ -267,12 +263,12 @@ func (i *Image) Labels(ctx context.Context) (map[string]string, error) {
 	return data.Labels, nil
 }
 
-// TopLayer returns the top layer id as a string
+// TopLayer returns the top layer id as a string.
 func (i *Image) TopLayer() string {
 	return i.storageImage.TopLayer
 }
 
-// Parent returns the parent image or nil if there is none
+// Parent returns the parent image or nil if there is none.
 func (i *Image) Parent(ctx context.Context) (*Image, error) {
 	tree, err := i.runtime.newFreshLayerTree()
 	if err != nil {
@@ -383,7 +379,7 @@ func (i *Image) removeContainers(options *RemoveImagesOptions) error {
 // an image specified by imageID.
 type RemoveContainerFunc func(imageID string) error
 
-// RemoveImagesReport is the assembled data from removing *one* image.
+// RemoveImageReport is the assembled data from removing *one* image.
 type RemoveImageReport struct {
 	// ID of the image.
 	ID string
@@ -478,7 +474,7 @@ func (i *Image) removeRecursive(ctx context.Context, rmMap map[string]*RemoveIma
 	// error.
 	if referencedBy != "" && numNames != 1 {
 		byID := strings.HasPrefix(i.ID(), referencedBy)
-		byDigest := strings.HasPrefix(referencedBy, "sha256:")
+		byDigest := strings.HasPrefix(referencedBy, "sha256:") || strings.HasPrefix(referencedBy, "sha512:")
 		if !options.Force {
 			if byID && numNames > 1 {
 				return processedIDs, fmt.Errorf("unable to delete image %q by ID with more than one tag (%s): please force removal", i.ID(), i.Names())
@@ -581,7 +577,7 @@ var errTagDigest = errors.New("tag by digest not supported")
 // Tag the image with the specified name and store it in the local containers
 // storage.  The name is normalized according to the rules of NormalizeName.
 func (i *Image) Tag(name string) error {
-	if strings.HasPrefix(name, "sha256:") { // ambiguous input
+	if strings.HasPrefix(name, "sha256:") || strings.HasPrefix(name, "sha512:") { // ambiguous input
 		return fmt.Errorf("%s: %w", name, errTagDigest)
 	}
 
@@ -617,7 +613,7 @@ var errUntagDigest = errors.New("untag by digest not supported")
 // the local containers storage.  The name is normalized according to the rules
 // of NormalizeName.
 func (i *Image) Untag(name string) error {
-	if strings.HasPrefix(name, "sha256:") { // ambiguous input
+	if strings.HasPrefix(name, "sha256:") || strings.HasPrefix(name, "sha512:") { // ambiguous input
 		return fmt.Errorf("%s: %w", name, errUntagDigest)
 	}
 
@@ -638,16 +634,9 @@ func (i *Image) Untag(name string) error {
 
 	name = ref.String()
 
-	foundName := false
-	for _, n := range i.Names() {
-		if n == name {
-			foundName = true
-			break
-		}
-	}
 	// Return an error if the name is not found, the c/storage
 	// RemoveNames() API does not create one if no match is found.
-	if !foundName {
+	if !slices.Contains(i.Names(), name) {
 		return fmt.Errorf("%s: %w", name, errTagUnknown)
 	}
 
@@ -942,7 +931,7 @@ func (i *Image) hasDifferentDigestWithSystemContext(ctx context.Context, remoteR
 	return true, nil
 }
 
-// driverData gets the driver data from the store on a layer
+// driverData gets the driver data from the store on a layer.
 func (i *Image) driverData() (*DriverData, error) {
 	store := i.runtime.store
 	layerID := i.TopLayer()
@@ -995,7 +984,7 @@ func (i *Image) source(ctx context.Context) (types.ImageSource, error) {
 }
 
 // rawConfigBlob returns the image's config as a raw byte slice.  Users need to
-// unmarshal it to the corresponding type (OCI, Docker v2s{1,2})
+// unmarshal it to the corresponding type (OCI, Docker v2s{1,2}).
 func (i *Image) rawConfigBlob(ctx context.Context) ([]byte, error) {
 	ref, err := i.StorageReference()
 	if err != nil {
@@ -1021,7 +1010,7 @@ func (i *Image) Manifest(ctx context.Context) (rawManifest []byte, mimeType stri
 }
 
 // getImageID creates an image object and uses the hex value of the config
-// blob's digest (if it has one) as the image ID for parsing the store reference
+// blob's digest (if it has one) as the image ID for parsing the store reference.
 func getImageID(ctx context.Context, src types.ImageReference, sys *types.SystemContext) (string, error) {
 	newImg, err := src.NewImage(ctx, sys)
 	if err != nil {
