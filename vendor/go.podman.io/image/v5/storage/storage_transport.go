@@ -409,6 +409,16 @@ func (s storageTransport) ValidatePolicyConfigurationScope(scope string) error {
 
 // validateImageID returns nil if id is a valid (full) image ID, or an error
 func validateImageID(id string) error {
-	_, err := digest.Parse("sha256:" + id)
-	return err
+	// Try SHA256 first (64 characters)
+	if len(id) == 64 {
+		_, err := digest.Parse("sha256:" + id)
+		return err
+	}
+	// Try SHA512 (128 characters)
+	if len(id) == 128 {
+		_, err := digest.Parse("sha512:" + id)
+		return err
+	}
+	// Invalid length
+	return fmt.Errorf("invalid image ID length: expected 64 (SHA256) or 128 (SHA512) characters, got %d", len(id))
 }

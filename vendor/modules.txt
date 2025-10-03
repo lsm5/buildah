@@ -567,6 +567,7 @@ go.podman.io/image/v5/pkg/blobinfocache/sqlite
 go.podman.io/image/v5/pkg/compression
 go.podman.io/image/v5/pkg/compression/internal
 go.podman.io/image/v5/pkg/compression/types
+go.podman.io/image/v5/pkg/digest
 go.podman.io/image/v5/pkg/docker/config
 go.podman.io/image/v5/pkg/shortnames
 go.podman.io/image/v5/pkg/strslice

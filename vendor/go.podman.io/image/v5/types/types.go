@@ -10,6 +10,7 @@ import (
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"go.podman.io/image/v5/docker/reference"
 	compression "go.podman.io/image/v5/pkg/compression/types"
+	digestpkg "go.podman.io/image/v5/pkg/digest"
 )
 
 // ImageTransport is a top-level namespace for ways to store/load an image.
@@ -388,6 +389,36 @@ type DefaultDigestAlgorithm struct{}
 // GetDigestAlgorithm returns the default digest algorithm (SHA256).
 func (d DefaultDigestAlgorithm) GetDigestAlgorithm() digest.Algorithm {
 	return digest.Canonical
+}
+
+// Global digest algorithm manager
+var globalDigestManager *digestManager
+
+// digestManager wraps the digest manager for global access
+type digestManager struct {
+	*digestpkg.Manager
+}
+
+// Manager is the digest algorithm manager interface
+type Manager interface {
+	GetDigestAlgorithm() digest.Algorithm
+	SetDigestAlgorithm(algorithm digest.Algorithm) error
+}
+
+// GetGlobalDigestAlgorithm returns the current global digest algorithm
+func GetGlobalDigestAlgorithm() digest.Algorithm {
+	if globalDigestManager == nil {
+		globalDigestManager = &digestManager{digestpkg.NewManager()}
+	}
+	return globalDigestManager.GetDigestAlgorithm()
+}
+
+// SetGlobalDigestAlgorithm sets the global digest algorithm
+func SetGlobalDigestAlgorithm(algorithm digest.Algorithm) error {
+	if globalDigestManager == nil {
+		globalDigestManager = &digestManager{digestpkg.NewManager()}
+	}
+	return globalDigestManager.SetDigestAlgorithm(algorithm)
 }
 
 // UnparsedImage is an Image-to-be; until it is verified and accepted, it only caries its identity and caches manifest and signature blobs.

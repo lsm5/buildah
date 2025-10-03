@@ -154,12 +154,12 @@ func (r *Runtime) Shutdown(force bool) error {
 
 // GetDigestAlgorithm returns the current digest algorithm used by the runtime.
 func (r *Runtime) GetDigestAlgorithm() digest.Algorithm {
-	return r.store.GetDigestAlgorithm()
+	return types.GetGlobalDigestAlgorithm()
 }
 
 // SetDigestAlgorithm sets the digest algorithm to be used by the runtime.
 func (r *Runtime) SetDigestAlgorithm(algorithm digest.Algorithm) error {
-	return r.store.SetDigestAlgorithm(algorithm)
+	return types.SetGlobalDigestAlgorithm(algorithm)
 }
 
 // storageToImage transforms a storage.Image to an Image.
