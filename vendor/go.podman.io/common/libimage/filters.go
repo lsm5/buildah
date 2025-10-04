@@ -481,7 +481,7 @@ func filterID(value string) filterFunc {
 
 // filterDigest creates a digest filter for matching the specified value.
 func filterDigest(value string) (filterFunc, error) {
-	if !strings.HasPrefix(value, "sha256:") {
+	if !strings.HasPrefix(value, "sha256:") && !strings.HasPrefix(value, "sha512:") {
 		return nil, fmt.Errorf("invalid value %q for digest filter", value)
 	}
 	return func(img *Image, _ *layerTree) (bool, error) {

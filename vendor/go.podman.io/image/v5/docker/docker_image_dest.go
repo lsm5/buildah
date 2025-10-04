@@ -98,6 +98,11 @@ func (d *dockerImageDestination) Close() error {
 	return d.c.Close()
 }
 
+// GetDigestAlgorithm returns the digest algorithm configured for the destination.
+func (d *dockerImageDestination) GetDigestAlgorithm() digest.Algorithm {
+	return types.GetDigestAlgorithm()
+}
+
 // SupportsSignatures returns an error (to be displayed to the user) if the destination certainly can't store signatures.
 // Note: It is still possible for PutSignatures to fail if SupportsSignatures returns nil.
 func (d *dockerImageDestination) SupportsSignatures(ctx context.Context) error {

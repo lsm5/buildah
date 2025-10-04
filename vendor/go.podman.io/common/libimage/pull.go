@@ -101,7 +101,8 @@ func (r *Runtime) Pull(ctx context.Context, name string, pullPolicy config.PullP
 
 		// If the image clearly refers to a local one, we can look it up directly.
 		// In fact, we need to since they are not parseable.
-		if strings.HasPrefix(name, "sha256:") || (len(name) == 64 && !strings.ContainsAny(name, "/.:@")) {
+		// Check for both sha256: and sha512: prefixes for digest-based lookups
+		if strings.HasPrefix(name, "sha256:") || strings.HasPrefix(name, "sha512:") || (len(name) == 64 && !strings.ContainsAny(name, "/.:@")) {
 			if pullPolicy == config.PullPolicyAlways {
 				return nil, fmt.Errorf("pull policy is always but image has been referred to by ID (%s)", name)
 			}
@@ -261,7 +262,9 @@ func (r *Runtime) copyFromDefault(ctx context.Context, ref types.ImageReference,
 			if err != nil {
 				return nil, nil, err
 			}
-			imageName = "sha256:" + storageName[1:]
+			// Use the configured digest algorithm for the image name
+			digestAlgorithm := r.GetDigestAlgorithm()
+			imageName = digestAlgorithm.String() + ":" + storageName[1:]
 		} else { // If the OCI-reference includes an image reference, use it
 			storageName = refName
 			imageName = storageName
@@ -280,7 +283,9 @@ func (r *Runtime) copyFromDefault(ctx context.Context, ref types.ImageReference,
 			if err != nil {
 				return nil, nil, err
 			}
-			imageName = "sha256:" + storageName[1:]
+			// Use the configured digest algorithm for the image name
+			digestAlgorithm := r.GetDigestAlgorithm()
+			imageName = digestAlgorithm.String() + ":" + storageName[1:]
 		default:
 			named, err := NormalizeName(storageName)
 			if err != nil {
@@ -306,7 +311,9 @@ func (r *Runtime) copyFromDefault(ctx context.Context, ref types.ImageReference,
 		if err != nil {
 			return nil, nil, err
 		}
-		imageName = "sha256:" + storageName[1:]
+		// Use the configured digest algorithm for the image name
+		digestAlgorithm := r.GetDigestAlgorithm()
+		imageName = digestAlgorithm.String() + ":" + storageName[1:]
 	}
 
 	// Create a storage reference.
@@ -340,8 +347,9 @@ func (r *Runtime) storageReferencesReferencesFromArchiveReader(ctx context.Conte
 		}
 		destNames = append(destNames, destName)
 		// Make sure the image can be loaded after the pull by
-		// replacing the @ with sha256:.
-		imageNames = append(imageNames, "sha256:"+destName[1:])
+		// replacing the @ with the configured digest algorithm.
+		digestAlgorithm := r.GetDigestAlgorithm()
+		imageNames = append(imageNames, digestAlgorithm.String()+":"+destName[1:])
 	} else {
 		for i := range destNames {
 			ref, err := NormalizeName(destNames[i])

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/opencontainers/go-digest"
 	"go.podman.io/image/v5/docker/internal/tarfile"
 	"go.podman.io/image/v5/internal/private"
 	"go.podman.io/image/v5/types"
@@ -51,6 +52,11 @@ func newImageDestination(sys *types.SystemContext, ref archiveReference) (privat
 // e.g. it should use the public hostname instead of the result of resolving CNAMEs or following redirects.
 func (d *archiveImageDestination) Reference() types.ImageReference {
 	return d.ref
+}
+
+// GetDigestAlgorithm returns the digest algorithm configured for the destination.
+func (d *archiveImageDestination) GetDigestAlgorithm() digest.Algorithm {
+	return types.GetDigestAlgorithm()
 }
 
 // Close removes resources associated with an initialized ImageDestination, if any.

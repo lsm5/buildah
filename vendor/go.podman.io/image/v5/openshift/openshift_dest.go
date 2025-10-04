@@ -69,6 +69,11 @@ func (d *openshiftImageDestination) Reference() types.ImageReference {
 	return d.client.ref
 }
 
+// GetDigestAlgorithm returns the digest algorithm configured for the destination.
+func (d *openshiftImageDestination) GetDigestAlgorithm() digest.Algorithm {
+	return types.GetDigestAlgorithm()
+}
+
 // Close removes resources associated with an initialized ImageDestination, if any.
 func (d *openshiftImageDestination) Close() error {
 	err := d.docker.Close()

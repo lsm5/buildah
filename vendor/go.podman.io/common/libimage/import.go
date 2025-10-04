@@ -128,5 +128,7 @@ func (r *Runtime) Import(ctx context.Context, path string, options *ImportOption
 		}
 	}
 
-	return "sha256:" + name, nil
+	// Use the configured digest algorithm for the image ID
+	digestAlgorithm := r.GetDigestAlgorithm()
+	return digestAlgorithm.String() + ":" + name, nil
 }

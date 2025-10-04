@@ -110,9 +110,12 @@ func (m *manifestSchema2) ConfigBlob(ctx context.Context) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		computedDigest := digest.FromBytes(blob)
-		if computedDigest != m.m.ConfigDescriptor.Digest {
-			return nil, fmt.Errorf("Download config.json digest %s does not match expected %s", computedDigest, m.m.ConfigDescriptor.Digest)
+		// Use the same algorithm as the expected digest
+		expectedDigest := m.m.ConfigDescriptor.Digest
+		algorithm := expectedDigest.Algorithm()
+		computedDigest := algorithm.FromBytes(blob)
+		if computedDigest != expectedDigest {
+			return nil, fmt.Errorf("Download config.json digest %s does not match expected %s", computedDigest, expectedDigest)
 		}
 		m.configBlob = blob
 	}

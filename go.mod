@@ -7,7 +7,7 @@ go 1.24.2
 require (
 	github.com/containerd/platforms v1.0.0-rc.1
 	github.com/containernetworking/cni v1.3.0
-	github.com/containers/luksy v0.0.0-20250910190358-2cf5bc928957
+	github.com/containers/luksy v0.0.0-20250714213221-8fccf784694e
 	github.com/containers/ocicrypt v1.2.1
 	github.com/cyphar/filepath-securejoin v0.4.1
 	github.com/docker/distribution v2.8.3+incompatible
@@ -17,13 +17,13 @@ require (
 	github.com/fsouza/go-dockerclient v1.12.2
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/mattn/go-shellwords v1.0.12
-	github.com/moby/buildkit v0.25.0
+	github.com/moby/buildkit v0.24.0
 	github.com/moby/sys/capability v0.4.0
 	github.com/moby/sys/userns v0.1.0
 	github.com/opencontainers/cgroups v0.0.5
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
-	github.com/opencontainers/runc v1.3.1
+	github.com/opencontainers/runc v1.3.2
 	github.com/opencontainers/runtime-spec v1.2.1
 	github.com/opencontainers/runtime-tools v0.9.1-0.20250523060157-0ea5ed0382a2
 	github.com/opencontainers/selinux v1.12.0
@@ -34,9 +34,9 @@ require (
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.11.1
 	go.etcd.io/bbolt v1.4.3
-	go.podman.io/common v0.65.1-0.20250916163606-92222dcd3da4
-	go.podman.io/image/v5 v5.37.1-0.20250916163606-92222dcd3da4
-	go.podman.io/storage v1.60.1-0.20250916163606-92222dcd3da4
+	go.podman.io/common v0.0.0-20250826054041-6e4bed3c9118
+	go.podman.io/image/v5 v5.37.0
+	go.podman.io/storage v1.60.0
 	golang.org/x/crypto v0.42.0
 	golang.org/x/sync v0.17.0
 	golang.org/x/sys v0.36.0
@@ -65,7 +65,7 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/disiqueira/gotree/v3 v3.0.2 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
-	github.com/docker/docker-credential-helpers v0.9.3 // indirect
+	github.com/docker/docker-credential-helpers v0.9.4 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.0.5 // indirect
@@ -137,3 +137,9 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 	tags.cncf.io/container-device-interface/specs-go v1.0.0 // indirect
 )
+
+replace go.podman.io/image/v5 => /home/lsm5/repositories/containers/container-libs/image
+
+replace go.podman.io/common => /home/lsm5/repositories/containers/container-libs/common
+
+replace go.podman.io/storage => /home/lsm5/repositories/containers/container-libs/storage
