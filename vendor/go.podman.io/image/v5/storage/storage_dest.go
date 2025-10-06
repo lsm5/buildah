@@ -37,6 +37,7 @@ import (
 	"go.podman.io/storage/pkg/chunked"
 	"go.podman.io/storage/pkg/chunked/toc"
 	"go.podman.io/storage/pkg/ioutils"
+	supportedDigests "go.podman.io/storage/pkg/supported-digests"
 )
 
 var (
@@ -193,11 +194,6 @@ func (s *storageImageDestination) Reference() types.ImageReference {
 	return s.imageRef
 }
 
-// GetDigestAlgorithm returns the digest algorithm configured for the destination.
-func (s *storageImageDestination) GetDigestAlgorithm() digest.Algorithm {
-	return types.GetDigestAlgorithm()
-}
-
 // Close cleans up the temporary directory and additional layer store handlers.
 func (s *storageImageDestination) Close() error {
 	// This is outside of the scope of HasThreadSafePutBlob, so we don’t need to hold s.lock.
@@ -294,7 +290,7 @@ func (s *storageImageDestination) putBlobToPendingFile(stream io.Reader, blobinf
 		}
 		defer decompressed.Close()
 
-		diffID := types.GetDigestAlgorithm().Digester()
+		diffID := supportedDigests.TmpDigestForNewObjects().Digester()
 		// Copy the data to the file.
 		// TODO: This can take quite some time, and should ideally be cancellable using context.Context.
 		_, err = io.Copy(diffID.Hash(), decompressed)
@@ -1038,19 +1034,19 @@ func (s *storageImageDestination) commitLayer(index int, info addedLayerInfo, si
 				return false, err
 			}
 		} else if trusted.diffID != untrustedDiffID {
-			// If the algorithms don't match, try to recompute the diffID with the correct algorithm
+			// If the algorithms don't match, we need to handle this carefully
 			if trusted.diffID.Algorithm() != untrustedDiffID.Algorithm() {
-				// Use the algorithm from the config's diffID to recompute the trusted diffID
-				configAlgorithm := untrustedDiffID.Algorithm()
-				// For now, just log this case and allow it through since both are valid digests
-				logrus.Debugf("Layer %d diffID algorithm mismatch: trusted=%s, config=%s, allowing through", index, trusted.diffID.Algorithm(), configAlgorithm)
+				// This is a critical security check - we cannot allow algorithm mismatches
+				// without proper validation. For now, we'll reject the layer to maintain security.
+				return false, fmt.Errorf("layer %d diffID algorithm mismatch: trusted=%s, config=%s - this indicates a potential security issue",
+					index, trusted.diffID.Algorithm(), untrustedDiffID.Algorithm())
 			} else {
 				return false, fmt.Errorf("layer %d (blob %s) does not match config's DiffID %q", index, trusted.logString(), untrustedDiffID)
 			}
 		}
 	}
 
-	id := layerID(parentLayer, trusted, types.GetDigestAlgorithm())
+	id := layerID(parentLayer, trusted, supportedDigests.TmpDigestForNewObjects())
 
 	if layer, err2 := s.imageRef.transport.store.Layer(id); layer != nil && err2 == nil {
 		// There's already a layer that should have the right contents, just reuse it.
@@ -1503,14 +1499,14 @@ func (s *storageImageDestination) CommitWithOptions(ctx context.Context, options
 		imgOptions.BigData = append(imgOptions.BigData, storage.ImageBigDataOption{
 			Key:    s.lockProtected.configDigest.String(),
 			Data:   v,
-			Digest: types.GetDigestAlgorithm().FromBytes(v),
+			Digest: supportedDigests.TmpDigestForNewObjects().FromBytes(v),
 		})
 	}
 	// Set up to save the options.UnparsedToplevel's manifest if it differs from
 	// the per-platform one, which is saved below.
 	if !bytes.Equal(toplevelManifest, s.manifest) {
 		// Use the configured digest algorithm for manifest digest
-		algorithm := types.GetDigestAlgorithm()
+		algorithm := supportedDigests.TmpDigestForNewObjects()
 		manifestDigest := algorithm.FromBytes(toplevelManifest)
 		key, err := manifestBigDataKey(manifestDigest)
 		if err != nil {
@@ -1544,7 +1540,7 @@ func (s *storageImageDestination) CommitWithOptions(ctx context.Context, options
 		imgOptions.BigData = append(imgOptions.BigData, storage.ImageBigDataOption{
 			Key:    "signatures",
 			Data:   s.signatures,
-			Digest: types.GetDigestAlgorithm().FromBytes(s.signatures),
+			Digest: supportedDigests.TmpDigestForNewObjects().FromBytes(s.signatures),
 		})
 	}
 	for instanceDigest, signatures := range s.signatureses {
@@ -1555,7 +1551,7 @@ func (s *storageImageDestination) CommitWithOptions(ctx context.Context, options
 		imgOptions.BigData = append(imgOptions.BigData, storage.ImageBigDataOption{
 			Key:    key,
 			Data:   signatures,
-			Digest: types.GetDigestAlgorithm().FromBytes(signatures),
+			Digest: supportedDigests.TmpDigestForNewObjects().FromBytes(signatures),
 		})
 	}
 
@@ -1598,10 +1594,10 @@ func (s *storageImageDestination) CommitWithOptions(ctx context.Context, options
 		// sizes (tracked in the metadata) which might have already
 		// been present with new values, when ideally we'd find a way
 		// to merge them since they all apply to the same image
-		// Create a digest function that uses the configured algorithm
-		algorithm := types.GetDigestAlgorithm()
+		// Create a digest function that uses the configured algorithm and handles schema1 manifests properly
 		digestFunc := func(data []byte) (digest.Digest, error) {
-			return algorithm.FromBytes(data), nil
+			// Use manifest.Digest to handle schema1 signature stripping properly
+			return manifest.Digest(data)
 		}
 		for _, data := range imgOptions.BigData {
 			if err := s.imageRef.transport.store.SetImageBigData(img.ID, data.Key, data.Data, digestFunc); err != nil {
@@ -1663,8 +1659,10 @@ func (s *storageImageDestination) CommitWithOptions(ctx context.Context, options
 // PutManifest writes the manifest to the destination.
 func (s *storageImageDestination) PutManifest(ctx context.Context, manifestBlob []byte, instanceDigest *digest.Digest) error {
 	// Use the configured digest algorithm for manifest digest
-	algorithm := types.GetDigestAlgorithm()
+	algorithm := supportedDigests.TmpDigestForNewObjects()
+	logrus.Debugf("PutManifest: Computing manifest digest using algorithm: %s", algorithm.String())
 	digest := algorithm.FromBytes(manifestBlob)
+	logrus.Debugf("PutManifest: Computed manifest digest: %s", digest.String())
 	s.manifest = bytes.Clone(manifestBlob)
 	if s.manifest == nil { // Make sure PutManifest can never succeed with s.manifest == nil
 		s.manifest = []byte{}

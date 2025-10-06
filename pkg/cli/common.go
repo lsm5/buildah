@@ -128,6 +128,7 @@ type BudResults struct {
 	SourceDateEpoch     string
 	RewriteTimestamp    bool
 	CreatedAnnotation   bool
+	DigestAlgorithm     string
 }
 
 // FromAndBugResults represents the results for common flags
@@ -329,6 +330,7 @@ newer:   only pull base and SBOM scanner images when newer images exist on the r
 	fs.StringSliceVar(&flags.UnsetEnvs, "unsetenv", nil, "unset environment variable from final image")
 	fs.StringSliceVar(&flags.UnsetLabels, "unsetlabel", nil, "unset label when inheriting labels from base image")
 	fs.StringSliceVar(&flags.UnsetAnnotations, "unsetannotation", nil, "unset annotation when inheriting annotations from base image")
+	fs.StringVar(&flags.DigestAlgorithm, "digest", "", "digest algorithm to use for content addressing (sha256, sha512). Defaults to value from storage.conf or sha256")
 	return fs
 }
 

@@ -78,6 +78,13 @@ func GenBuildOptions(c *cobra.Command, inputArgs []string, iopts BuildOptions) (
 		return options, nil, nil, err
 	}
 
+	// Validate digest algorithm if provided
+	if c.Flag("digest").Changed {
+		if iopts.BudResults.DigestAlgorithm != "sha256" && iopts.BudResults.DigestAlgorithm != "sha512" {
+			return options, nil, nil, fmt.Errorf("invalid digest algorithm %q: must be sha256 or sha512", iopts.BudResults.DigestAlgorithm)
+		}
+	}
+
 	if c.Flag("logsplit").Changed {
 		if !c.Flag("logfile").Changed {
 			return options, nil, nil, errors.New("cannot use --logsplit without --logfile")
@@ -465,6 +472,11 @@ func GenBuildOptions(c *cobra.Command, inputArgs []string, iopts BuildOptions) (
 	}
 
 	options.Envs = LookupEnvVarReferences(iopts.Envs, os.Environ())
+
+	// Set digest algorithm if provided
+	if c.Flag("digest").Changed {
+		options.DigestAlgorithm = iopts.BudResults.DigestAlgorithm
+	}
 
 	return options, containerfiles, removeAll, nil
 }

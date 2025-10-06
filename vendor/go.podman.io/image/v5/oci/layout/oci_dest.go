@@ -103,11 +103,6 @@ func (d *ociImageDestination) Reference() types.ImageReference {
 	return d.ref
 }
 
-// GetDigestAlgorithm returns the digest algorithm configured for the destination.
-func (d *ociImageDestination) GetDigestAlgorithm() digest.Algorithm {
-	return types.GetDigestAlgorithm()
-}
-
 // Close removes resources associated with an initialized ImageDestination, if any.
 func (d *ociImageDestination) Close() error {
 	return nil
@@ -139,7 +134,7 @@ func (d *ociImageDestination) PutBlobWithOptions(ctx context.Context, stream io.
 		}
 	}()
 
-	digester, stream := putblobdigest.DigestIfCanonicalUnknown(stream, inputInfo)
+	digester, stream := putblobdigest.DigestIfConfiguredUnknown(stream, inputInfo)
 	// TODO: This can take quite some time, and should ideally be cancellable using ctx.Done().
 	size, err := io.Copy(blobFile, stream)
 	if err != nil {

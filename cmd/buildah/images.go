@@ -318,7 +318,17 @@ func formatHistory(history []string, name, tag string) string {
 
 func truncateID(id string, truncate bool) string {
 	if !truncate {
-		return "sha256:" + id
+		// Detect digest algorithm based on ID length
+		// SHA256 = 64 chars, SHA512 = 128 chars
+		switch len(id) {
+		case 64:
+			return "sha256:" + id
+		case 128:
+			return "sha512:" + id
+		default:
+			// Fallback to sha256 for unknown lengths
+			return "sha256:" + id
+		}
 	}
 	idTruncLength := 12
 	if len(id) > idTruncLength {

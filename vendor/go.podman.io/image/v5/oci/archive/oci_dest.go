@@ -54,11 +54,6 @@ func (d *ociArchiveImageDestination) Reference() types.ImageReference {
 	return d.ref
 }
 
-// GetDigestAlgorithm returns the digest algorithm configured for the destination.
-func (d *ociArchiveImageDestination) GetDigestAlgorithm() digest.Algorithm {
-	return types.GetDigestAlgorithm()
-}
-
 // Close removes resources associated with an initialized ImageDestination, if any
 // Close deletes the temp directory of the oci-archive image
 func (d *ociArchiveImageDestination) Close() error {

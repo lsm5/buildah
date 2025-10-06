@@ -418,4 +418,6 @@ type BuildOptions struct {
 	// CreatedAnnotation controls whether or not an "org.opencontainers.image.created"
 	// annotation is present in the output image.
 	CreatedAnnotation types.OptionalBool
+	// DigestAlgorithm specifies the digest algorithm to use for content addressing
+	DigestAlgorithm string
 }

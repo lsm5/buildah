@@ -21,6 +21,7 @@ import (
 	"go.podman.io/image/v5/types"
 	"go.podman.io/storage/pkg/archive"
 	"go.podman.io/storage/pkg/ioutils"
+	supportedDigests "go.podman.io/storage/pkg/supported-digests"
 )
 
 type blobCacheDestination struct {
@@ -43,10 +44,6 @@ func (b *BlobCache) NewImageDestination(ctx context.Context, sys *types.SystemCo
 
 func (d *blobCacheDestination) Reference() types.ImageReference {
 	return d.reference
-}
-
-func (d *blobCacheDestination) GetDigestAlgorithm() digest.Algorithm {
-	return d.destination.GetDigestAlgorithm()
 }
 
 func (d *blobCacheDestination) Close() error {
@@ -96,7 +93,7 @@ func (d *blobCacheDestination) saveStream(wg *sync.WaitGroup, decompressReader i
 		}
 	}()
 
-	digester := d.destination.GetDigestAlgorithm().Digester()
+	digester := supportedDigests.TmpDigestForNewObjects().Digester()
 	if err := func() error { // A scope for defer
 		defer tempFile.Close()
 

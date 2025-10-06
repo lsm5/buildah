@@ -16,6 +16,7 @@ import (
 	"go.podman.io/common/libimage/define"
 	"go.podman.io/common/libimage/platform"
 	"go.podman.io/common/pkg/config"
+	"go.podman.io/common/pkg/digestutils"
 	"go.podman.io/image/v5/docker/reference"
 	"go.podman.io/image/v5/pkg/shortnames"
 	storageTransport "go.podman.io/image/v5/storage"
@@ -152,16 +153,6 @@ func (r *Runtime) Shutdown(force bool) error {
 	return err
 }
 
-// GetDigestAlgorithm returns the current digest algorithm used by the runtime.
-func (r *Runtime) GetDigestAlgorithm() digest.Algorithm {
-	return types.GetDigestAlgorithm()
-}
-
-// SetDigestAlgorithm sets the digest algorithm to be used by the runtime.
-func (r *Runtime) SetDigestAlgorithm(algorithm digest.Algorithm) error {
-	return types.SetDigestAlgorithm(algorithm)
-}
-
 // storageToImage transforms a storage.Image to an Image.
 func (r *Runtime) storageToImage(storageImage *storage.Image, ref types.ImageReference) *Image {
 	return &Image{
@@ -283,12 +274,9 @@ func (r *Runtime) LookupImage(name string, options *LookupImageOptions) (*Image,
 
 	byDigest := false
 	originalName := name
-	if strings.HasPrefix(name, "sha256:") {
+	if trimmed, found := digestutils.TrimDigestPrefix(name); found {
 		byDigest = true
-		name = strings.TrimPrefix(name, "sha256:")
-	} else if strings.HasPrefix(name, "sha512:") {
-		byDigest = true
-		name = strings.TrimPrefix(name, "sha512:")
+		name = trimmed
 	}
 	byFullID := reference.IsFullIdentifier(name)
 

@@ -7,8 +7,10 @@ import (
 	"github.com/containers/buildah/imagebuildah"
 	buildahcli "github.com/containers/buildah/pkg/cli"
 	"github.com/containers/buildah/util"
+	digest "github.com/opencontainers/go-digest"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	supportedDigests "go.podman.io/storage/pkg/supported-digests"
 )
 
 func init() {
@@ -91,6 +93,19 @@ func buildCmd(c *cobra.Command, inputArgs []string, iopts buildahcli.BuildOption
 	}()
 
 	options.DefaultMountsFilePath = globalFlagResults.DefaultMountsFile
+
+	// Configure digest algorithm if specified
+	if options.DigestAlgorithm != "" {
+		algorithm := digest.Algorithm(options.DigestAlgorithm)
+		if algorithm != digest.SHA256 && algorithm != digest.SHA512 {
+			return fmt.Errorf("unsupported digest algorithm: %s", options.DigestAlgorithm)
+		}
+		err := supportedDigests.TmpSetDigestForNewObjects(algorithm)
+		if err != nil {
+			return fmt.Errorf("failed to set digest algorithm: %w", err)
+		}
+		logrus.Debugf("Set digest algorithm to %s", algorithm.String())
+	}
 
 	store, err := getStore(c)
 	if err != nil {
