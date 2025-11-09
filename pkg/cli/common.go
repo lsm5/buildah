@@ -66,6 +66,7 @@ type BudResults struct {
 	Compress            bool
 	Creds               string
 	CPPFlags            []string
+	Digest              string
 	DisableCompression  bool
 	DisableContentTrust bool
 	IgnoreFile          string

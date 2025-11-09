@@ -7,8 +7,10 @@ import (
 	"github.com/containers/buildah/imagebuildah"
 	buildahcli "github.com/containers/buildah/pkg/cli"
 	"github.com/containers/buildah/util"
+	digest "github.com/opencontainers/go-digest"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
+	supporteddigests "go.podman.io/storage/pkg/supported-digests"
 )
 
 func init() {
@@ -55,6 +57,8 @@ func init() {
 	buildFlags := buildahcli.GetBudFlags(&buildFlagResults)
 	buildFlags.StringVar(&buildFlagResults.Runtime, "runtime", util.Runtime(), "`path` to an alternate runtime. Use BUILDAH_RUNTIME environment variable to override.")
 
+	buildFlags.StringVar(&buildFlagResults.Digest, "digest", "", "build with specified digest type")
+
 	layerFlags := buildahcli.GetLayerFlags(&layerFlagsResults)
 	fromAndBudFlags, err := buildahcli.GetFromAndBudFlags(&fromAndBudResults, &userNSResults, &namespaceResults)
 	if err != nil {
@@ -92,6 +96,17 @@ func buildCmd(c *cobra.Command, inputArgs []string, iopts buildahcli.BuildOption
 
 	options.DefaultMountsFilePath = globalFlagResults.DefaultMountsFile
 
+	if options.Digest != "" {
+		algorithm := digest.Algorithm(options.Digest)
+		if algorithm != digest.SHA256 && algorithm != digest.SHA512 {
+			return fmt.Errorf("unsupported digest algorithm: %s", options.Digest)
+		}
+		err := supporteddigests.TmpSetDigestForNewObjects(algorithm)
+		if err != nil {
+			return fmt.Errorf("failed to set digest algorithm: %w", err)
+		}
+		logrus.Debugf("Set digest algorithm to %s", algorithm.String())
+	}
 	store, err := getStore(c)
 	if err != nil {
 		return err

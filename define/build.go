@@ -421,4 +421,6 @@ type BuildOptions struct {
 	// MetadataFile is the name of a file to which the builder should write a JSON map
 	// containing metadata about the built image.
 	MetadataFile string
+	// Digest controls the digest type to use for generating image digest
+	Digest string
 }

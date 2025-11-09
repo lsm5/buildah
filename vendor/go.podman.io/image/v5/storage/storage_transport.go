@@ -11,6 +11,7 @@ import (
 	digest "github.com/opencontainers/go-digest"
 	"github.com/sirupsen/logrus"
 	"go.podman.io/image/v5/docker/reference"
+	"go.podman.io/image/v5/pkg/digestutils"
 	"go.podman.io/image/v5/transports"
 	"go.podman.io/image/v5/types"
 	"go.podman.io/storage"
@@ -409,6 +410,10 @@ func (s storageTransport) ValidatePolicyConfigurationScope(scope string) error {
 
 // validateImageID returns nil if id is a valid (full) image ID, or an error
 func validateImageID(id string) error {
-	_, err := digest.Parse("sha256:" + id)
+	prefix, err := digestutils.AlgorithmPrefix(id)
+	if err != nil {
+		return err
+	}
+	_, err = digest.Parse(prefix + id)
 	return err
 }
