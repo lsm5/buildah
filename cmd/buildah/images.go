@@ -318,13 +318,20 @@ func formatHistory(history []string, name, tag string) string {
 
 func truncateID(id string, truncate bool) string {
 	if !truncate {
-		return "sha256:" + id
+		return getDigestPrefixFromID(id) + id
 	}
 	idTruncLength := 12
 	if len(id) > idTruncLength {
 		return id[:idTruncLength]
 	}
 	return id
+}
+
+func getDigestPrefixFromID(id string) string {
+	if len(id) == 128 {
+		return "sha512:"
+	}
+	return "sha256:"
 }
 
 func imagesToGeneric(templParams []imageOutputParams) (genericParams []any) {
